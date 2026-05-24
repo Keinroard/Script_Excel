@@ -1,0 +1,131 @@
+function main(workbook: ExcelScript.Workbook) {
+    const sheet = workbook.getActiveWorksheet();
+    const usedRange = sheet.getUsedRange();
+    if (!usedRange) return;
+
+    const rowCount = usedRange.getRowCount();
+    if (rowCount < 2) return;
+
+    const nomRange = sheet.getRangeByIndexes(1, 1, rowCount - 1, 1);     // B
+    const prenomRange = sheet.getRangeByIndexes(1, 2, rowCount - 1, 1);  // C
+
+    const noms = nomRange.getValues();
+    const prenoms = prenomRange.getValues();
+
+    const civilites = ["M.", "M", "MME", "MADAME", "MR", "MONSIEUR", "SIR", "STE", "SAS"];
+
+    function removeAccents(value: string): string {
+        return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    }
+
+    function cleanBase(value: unknown): string {
+        if (value === null || value === undefined) return "";
+
+        let text = String(value);
+
+        text = removeAccents(text);
+
+        // Supprime les chiffres
+        text = text.replace(/[0-9]/g, "");
+
+        // Remplace les caractères parasites par des espaces
+        text = text.replace(/[?!_;,:/\\()[\]{}"`~*=+<>|]/g, " ");
+
+        // Supprime les tirets non encadrés par deux lettres
+        text = text.replace(/(^|[^A-Za-z])-+([^A-Za-z]|$)/g, " ");
+
+        // Transforme les doubles tirets restants en espace
+        text = text.replace(/--+/g, " ");
+
+        // Nettoie les espaces
+        text = text.replace(/\s+/g, " ").trim();
+
+        return text;
+    }
+
+    function extractCivilite(text: string): { civilite: string, reste: string } {
+        let words = text.split(" ").filter(w => w !== "");
+        let found = "";
+
+        words = words.filter(word => {
+            const normalized = word.toUpperCase().replace(/\.$/, "");
+
+            for (const civ of civilites) {
+                const civNorm = civ.toUpperCase().replace(/\.$/, "");
+                if (normalized === civNorm) {
+                    if (!found) found = civ === "M" ? "M." : civ.toUpperCase();
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        return {
+            civilite: found,
+            reste: words.join(" ")
+        };
+    }
+
+    function formatNom(value: string): string {
+        return value.toUpperCase();
+    }
+
+    function capitalizeWord(word: string): string {
+        if (word.length === 0) return "";
+
+        return word
+            .split("-")
+            .map(part => {
+                if (part.length === 0) return "";
+                return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+            })
+            .join("-");
+    }
+
+    function formatPrenom(value: string): string {
+        return value
+            .split(" ")
+            .map(word => capitalizeWord(word))
+            .join(" ");
+    }
+
+    const results: string[][] = [];
+
+    for (let i = 0; i < rowCount - 1; i++) {
+        let rawNom = cleanBase(noms[i][0]);
+        let rawPrenom = cleanBase(prenoms[i][0]);
+
+        const civNom = extractCivilite(rawNom);
+        const civPrenom = extractCivilite(rawPrenom);
+
+        const civilite = civNom.civilite || civPrenom.civilite;
+
+        rawNom = civNom.reste;
+        rawPrenom = civPrenom.reste;
+
+        const nom = formatNom(rawNom);
+        const prenom = formatPrenom(rawPrenom);
+
+        let fullName = [civilite, nom, prenom]
+            .filter(part => part !== "")
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        // Vérifie la longueur utile sans espaces, points ni tirets
+        const usefulLength = fullName.replace(/[ .-]/g, "").length;
+
+        if (usefulLength < 3) {
+            fullName = "";
+        }
+
+        results.push([fullName]);
+    }
+
+    sheet.getRange("B1").setValue("Nom complet nettoyé");
+    nomRange.setValues(results);
+
+    sheet.getRange("C1").setValue("Prénom");
+    prenomRange.clear(ExcelScript.ClearApplyTo.contents);
+}

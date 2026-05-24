@@ -1,0 +1,145 @@
+function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getActiveWorksheet();
+
+  const startRow = 2;
+  const mailColumn = "E";
+
+  const usedRange = sheet.getUsedRange();
+  if (!usedRange) return;
+
+  const lastRow = usedRange.getRowIndex() + usedRange.getRowCount();
+
+  const range = sheet.getRange(
+    `${mailColumn}${startRow}:${mailColumn}${lastRow}`
+  );
+
+  const values = range.getValues();
+
+  function removeAccents(text: string): string {
+    return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function cleanEmail(value: unknown): string {
+    if (value === null || value === undefined) return "";
+
+    let email = String(value).trim().toLowerCase();
+
+    // Ignore si pas de @
+    if (!email.includes("@")) return "";
+
+    email = removeAccents(email);
+
+    // Nettoyage général
+    email = email
+      .replace(/mailto:/gi, "")
+      .replace(/\s+/g, "")
+      .replace(/,/g, ".")
+      .replace(/;/g, "")
+      .replace(/[<>"'`]/g, "")
+      .replace(/@+/g, "@");
+
+    // Il doit y avoir un seul @
+    const parts = email.split("@");
+    if (parts.length !== 2) return "";
+
+    let local = parts[0];
+    let domain = parts[1];
+
+    // ======================
+    // LOCAL PART (avant @)
+    // ======================
+    local = local
+      .replace(/[^a-z0-9._%+\-]/g, "")
+      .replace(/--+/g, "")
+      .replace(/\.+/g, ".")
+      .replace(/^\.+|\.+$/g, "")
+      .replace(/^[-_]+|[-_]+$/g, "");
+
+    // ======================
+    // DOMAIN PART (après @)
+    // ======================
+    domain = domain
+      .replace(/[^a-z0-9.\-]/g, "")
+      .replace(/\.+/g, ".")
+      .replace(/^\.+|\.+$/g, "");
+
+    // Corrections fréquentes vues dans fichiers sales
+    const domainCorrections: Record<string, string> = {
+      "gmail.con": "gmail.com",
+      "gmail.cm": "gmail.com",
+      "gmai.com": "gmail.com",
+      "gmial.com": "gmail.com",
+      "gmailcom": "gmail.com",
+      "gmailcom.fr": "gmail.com",
+      "gmail.fr.fr": "gmail.fr",
+      "gmail.com.fr": "gmail.com",
+
+      "hotmailfr": "hotmail.fr",
+      "hotmailfr.fr": "hotmail.fr",
+      "hotmail.fr.fr": "hotmail.fr",
+      "hotmai.com": "hotmail.com",
+      "hotmial.com": "hotmail.com",
+      "hotnail.com": "hotmail.com",
+
+      "yahoofr": "yahoo.fr",
+      "yahoofr.fr": "yahoo.fr",
+      "yahoo.fr.fr": "yahoo.fr",
+      "yaho.com": "yahoo.com",
+
+      "outlok.com": "outlook.com",
+      "outlookfr": "outlook.fr",
+
+      "icloudcom": "icloud.com",
+      "icloudfr": "icloud.fr",
+
+      "orangefr": "orange.fr",
+      "lapostefr": "laposte.net",
+
+      "freefr": "free.fr",
+      "sfrfr": "sfr.fr",
+
+      "testmailfr": "testmail.fr",
+      "testmail.fr.fr": "testmail.fr",
+
+      "example.fr.fr": "example.fr"
+    };
+
+    if (domainCorrections[domain]) {
+      domain = domainCorrections[domain];
+    }
+
+    // Corrige domaines collés : gmailcom -> gmail.com
+    domain = domain.replace(
+      /^(gmail|hotmail|yahoo|outlook|orange|laposte|free|sfr|icloud|protonmail|live|msn|wanadoo|bbox|numericable|club-internet|testmail|example)(com|fr|net|org|io|co|be|eu|me|ai|app|dev|tech|xyz|cloud|online|shop|store|agency|digital|email|company|info|biz|edu|gov)$/g,
+      "$1.$2"
+    );
+
+    // Reconstitue l'email
+    const finalEmail = `${local}@${domain}`;
+
+    // ======================
+    // VALIDATION ROBUSTE
+    // ======================
+    const validEmail =
+      /^[a-z0-9._%+\-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
+
+    // Vérifie TLD >= 2 lettres
+    const tld = domain.split(".").pop();
+
+    if (
+      validEmail.test(finalEmail) &&
+      tld &&
+      /^[a-z]{2,}$/i.test(tld)
+    ) {
+      return finalEmail;
+    }
+
+    return "";
+  }
+
+  for (let i = 0; i < values.length; i++) {
+    values[i][0] = cleanEmail(values[i][0]);
+  }
+
+  range.setValues(values);
+}

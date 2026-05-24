@@ -1,0 +1,37 @@
+function main(workbook: ExcelScript.Workbook) {
+    const sheet = workbook.getActiveWorksheet();
+
+    // Colonne G = index 6
+    const invoiceColumnIndex = 6;
+
+    const usedRange = sheet.getUsedRange();
+    if (!usedRange) return;
+
+    const rowCount = usedRange.getRowCount();
+
+    // On ignore la ligne 1 = en-tête
+    if (rowCount <= 1) return;
+
+    const targetRange = sheet.getRangeByIndexes(
+        1,
+        invoiceColumnIndex,
+        rowCount - 1,
+        1
+    );
+
+    // Forcer le format texte pour éviter les pertes de chiffres
+    targetRange.setNumberFormat("@");
+
+    const values = targetRange.getTexts();
+
+    const cleanedValues = values.map(row => {
+        const originalValue = row[0] ?? "";
+
+        // Garde uniquement les chiffres 0-9
+        const cleanedValue = originalValue.replace(/\D/g, "");
+
+        return [cleanedValue];
+    });
+
+    targetRange.setValues(cleanedValues);
+}

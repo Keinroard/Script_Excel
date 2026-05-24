@@ -1,0 +1,260 @@
+function main(workbook: ExcelScript.Workbook) {
+  const ws = workbook.getActiveWorksheet();
+  const usedRange = ws.getUsedRange();
+  if (!usedRange) return;
+
+  try {
+    usedRange.clear(ExcelScript.ClearApplyTo.hyperlinks);
+  } catch (e) {
+    console.log("Hyperliens : suppression ignorée.");
+  }
+
+  let values: (string | number | boolean)[][] = usedRange.getValues();
+
+  const expectedHeaders: string[] = [
+    "Reference client",
+    "Nom",
+    "Prénom",
+    "Adresse",
+    "Mail",
+    "Numero de telephone",
+    "Numéro de facture",
+    "Date d'ouverture",
+    "Date de fermeture",
+    "Montant",
+    "Source_system",
+    "Batch_ID",
+    "Devise",
+    "Statut_flux",
+    "Commentaire_technique",
+    "Payload_JSON",
+    "Checksum_source"
+  ];
+
+  function normalizeHeader(value: string): string {
+    return value
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]/g, "");
+  }
+
+  function cleanText(value: string | number | boolean): string | number | boolean {
+    if (typeof value === "number" || typeof value === "boolean") return value;
+
+    return String(value ?? "")
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\u00A0/g, " ")
+      .replace(/<[^>]*>/g, "")
+      .replace(/^mailto:/i, "")
+      .replace(/^tel:/i, "")
+      .replace(/^mobile:/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function looksLikeJson(text: string): boolean {
+    const t = text.trim();
+    return (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"));
+  }
+
+  function extractJson(text: string, header: string): string {
+    const normalized = text
+      .replace(/'/g, "\"")
+      .replace(/\bNone\b/g, "null")
+      .replace(/\bTrue\b/g, "true")
+      .replace(/\bFalse\b/g, "false");
+
+    try {
+      const parsed: { [key: string]: string | number | boolean | null } = JSON.parse(normalized);
+
+      if (header === "Adresse" && parsed["adresse"] !== undefined) return String(parsed["adresse"]);
+      if (header === "Numéro de facture" && parsed["invoice"] !== undefined) return String(parsed["invoice"]);
+      if (header === "Reference client" && parsed["ref"] !== undefined) return String(parsed["ref"]);
+      if (header === "Montant" && parsed["amount"] !== undefined) return String(parsed["amount"]);
+
+      return JSON.stringify(parsed);
+    } catch (e) {
+      return text;
+    }
+  }
+
+  function properCase(text: string): string {
+    return text
+      .toLowerCase()
+      .split(" ")
+      .map((word: string): string =>
+        word.length === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1)
+      )
+      .join(" ");
+  }
+
+  function isValidMontant(value: string | number | boolean): boolean {
+    const montant = String(value ?? "").trim();
+
+    if (montant === "") return false;
+
+    // Accepte : 1200, 1200.50, -1200, -1200.50
+    return /^-?\d+(\.\d+)?$/.test(montant);
+  }
+
+  // Nettoyage des en-têtes
+  for (let c = 0; c < values[0].length; c++) {
+    values[0][c] = String(cleanText(values[0][c]));
+  }
+
+  // Réorganisation des colonnes attendues
+  const currentHeaders: string[] = values[0].map((h) => String(h ?? "").trim());
+  const normalizedCurrentHeaders: string[] = currentHeaders.map((h) => normalizeHeader(h));
+
+  const selectedIndexes: number[] = [];
+  const alreadyUsed: boolean[] = currentHeaders.map(() => false);
+
+  for (const expectedHeader of expectedHeaders) {
+    const index = normalizedCurrentHeaders.indexOf(normalizeHeader(expectedHeader));
+
+    if (index >= 0) {
+      selectedIndexes.push(index);
+      alreadyUsed[index] = true;
+    }
+  }
+
+  for (let i = 0; i < currentHeaders.length; i++) {
+    if (!alreadyUsed[i]) selectedIndexes.push(i);
+  }
+
+  values = values.map((row) => selectedIndexes.map((index) => row[index] ?? ""));
+
+  for (let c = 0; c < expectedHeaders.length && c < values[0].length; c++) {
+    values[0][c] = expectedHeaders[c];
+  }
+
+  // Nettoyage cellule par cellule
+  for (let r = 1; r < values.length; r++) {
+    for (let c = 0; c < values[r].length; c++) {
+      const header = String(values[0][c] ?? "").trim();
+      let cleaned: string | number | boolean = cleanText(values[r][c]);
+
+      if (typeof cleaned === "string" && looksLikeJson(cleaned)) {
+        cleaned = extractJson(cleaned, header);
+        cleaned = String(cleanText(cleaned));
+      }
+
+      if (typeof cleaned === "string") {
+        if (header === "Mail") {
+          cleaned = cleaned
+            .replace(/[<>;]/g, "")
+            .replace(/\s+at\s+/i, "@")
+            .replace(/\s+\.\s+/g, ".")
+            .replace(/\s+/g, "")
+            .toLowerCase();
+        }
+
+        if (header === "Numero de telephone") {
+          cleaned = cleaned.replace(/[^\d+]/g, "").replace(/^0033/, "+33");
+        }
+
+        if (header === "Montant") {
+          cleaned = cleaned
+            .replace(/EUR|EURO|euros|€/gi, "")
+            .replace(",", ".")
+            .replace(/\s+/g, "")
+            .trim();
+        }
+
+        if (header === "Devise") {
+          const currency = cleaned.toUpperCase().trim();
+          cleaned = currency === "€" || currency === "EURO" ? "EUR" : currency;
+        }
+
+        if (header === "Statut_flux") {
+          cleaned = cleaned.toUpperCase().replace("REJECT?", "REJECT");
+        }
+
+        if (header === "Nom" || header === "Prénom") {
+          cleaned = properCase(cleaned);
+        }
+      }
+
+      values[r][c] = cleaned;
+    }
+  }
+
+  // Suppression des lignes où A:J sont toutes vides
+  const cleanedRows: (string | number | boolean)[][] = [values[0]];
+
+  for (let r = 1; r < values.length; r++) {
+    let emptyAtoJ = true;
+
+    for (let c = 0; c < 10; c++) {
+      if (String(values[r][c] ?? "").trim() !== "") {
+        emptyAtoJ = false;
+        break;
+      }
+    }
+
+    if (!emptyAtoJ) cleanedRows.push(values[r]);
+  }
+
+  // Suppression effective des colonnes K à Q : on conserve uniquement A:J
+  const headersAtoJ = cleanedRows[0].slice(0, 10);
+
+  const finalRows: (string | number | boolean)[][] = [headersAtoJ];
+  const anomalyRows: (string | number | boolean)[][] = [headersAtoJ];
+
+  for (let r = 1; r < cleanedRows.length; r++) {
+    const rowAtoJ = cleanedRows[r].slice(0, 10);
+    const montant = rowAtoJ[9];
+
+    if (!isValidMontant(montant)) {
+      anomalyRows.push(rowAtoJ);
+    } else {
+      finalRows.push(rowAtoJ);
+    }
+  }
+
+  // Réécriture de la feuille principale
+  usedRange.clear(ExcelScript.ClearApplyTo.contents);
+
+  ws.getRangeByIndexes(0, 0, finalRows.length, finalRows[0].length).setValues(finalRows);
+
+  // Supprimer les anciennes colonnes K:Q si elles restent physiquement présentes
+  try {
+    ws.getRange("K:Q").delete(ExcelScript.DeleteShiftDirection.left);
+  } catch (e) {
+    console.log("Colonnes K:Q déjà absentes ou non supprimables.");
+  }
+
+  // Création / remplacement de la feuille anomalie_montant
+  const existingAnomalySheet = workbook.getWorksheet("anomalie_montant");
+  if (existingAnomalySheet) existingAnomalySheet.delete();
+
+  const anomalySheet = workbook.addWorksheet("anomalie_montant");
+
+  if (anomalyRows.length > 1) {
+    anomalySheet
+      .getRangeByIndexes(0, 0, anomalyRows.length, anomalyRows[0].length)
+      .setValues(anomalyRows);
+
+    anomalySheet.getRangeByIndexes(0, 0, 1, anomalyRows[0].length)
+      .getFormat()
+      .getFont()
+      .setBold(true);
+
+    anomalySheet.getUsedRange()?.getFormat().autofitColumns();
+  } else {
+    anomalySheet.getRange("A1").setValue("Aucune anomalie montant détectée.");
+  }
+
+  ws.getRangeByIndexes(0, 0, 1, finalRows[0].length)
+    .getFormat()
+    .getFont()
+    .setBold(true);
+
+  ws.getUsedRange()?.getFormat().autofitColumns();
+
+  console.log("Nettoyage terminé.");
+  console.log("Lignes conservées : " + String(finalRows.length - 1));
+  console.log("Anomalies montant extraites : " + String(anomalyRows.length - 1));
+}

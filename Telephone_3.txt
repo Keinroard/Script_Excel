@@ -1,0 +1,628 @@
+function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getActiveWorksheet();
+  const usedRange = sheet.getUsedRange();
+  if (!usedRange) return;
+
+  const rowCount = usedRange.getRowCount();
+  const phoneColumn = sheet.getRangeByIndexes(1, 5, rowCount - 1, 1);
+
+  phoneColumn.setNumberFormatLocal("@");
+
+  const values = phoneColumn.getValues();
+  const texts = phoneColumn.getTexts();
+  const output: string[][] = [];
+
+  for (let i = 0; i < values.length; i++) {
+    output.push([cleanPhone(values[i][0], texts[i][0])]);
+  }
+
+  phoneColumn.setValues(output);
+  console.log("Nettoyage terminé.");
+}
+
+type CountryRule = {
+  code: string;
+  iso: string;
+  min: number;
+  max: number;
+  removeZero: boolean;
+};
+
+type ParsedPhone = {
+  countryCode: string;
+  iso: string;
+  national: string;
+};
+
+type ParsedInput = {
+  cleaned: string;
+  digits: string;
+  extDigits: string;
+};
+
+function cleanPhone(rawValue: string | number | boolean, displayedText: string): string {
+  if (rawValue === null || rawValue === undefined || rawValue === "") return "";
+
+  const rawText = String(rawValue).trim();
+  const displayText = String(displayedText || "").trim();
+
+  const source = chooseBestSource(rawText, displayText);
+  const expanded = normalizeScientificNotation(source);
+  const parsedInput = prepareInput(expanded);
+
+  if (parsedInput.digits === "") return "";
+
+  const result = analysePhone(parsedInput);
+  if (result !== "") return result;
+
+  return formatVirtualNumber(parsedInput.digits, parsedInput.extDigits);
+}
+
+function prepareInput(value: string): ParsedInput {
+  let text = value.trim();
+
+  let extDigits = "";
+  const extMatch = text.match(/\b(?:poste|ext|extension)\s*[:\-]?\s*(\d+)/i);
+  if (extMatch) {
+    extDigits = extMatch[1];
+    text = text.replace(extMatch[0], " ");
+  }
+
+  text = text
+    .replace(/\btel\s*:/gi, " ")
+    .replace(/\bmobile\s*/gi, " ")
+    .replace(/[()\-\.\/]/g, " ")
+    .trim();
+
+  return {
+    cleaned: text,
+    digits: text.replace(/\D/g, ""),
+    extDigits
+  };
+}
+
+function analysePhone(input: ParsedInput): string {
+  const explicit = parseExplicitCountry(input);
+  if (explicit !== "") return explicit;
+
+  const francePrefix = parseFrancePrefixAnomaly(input.digits);
+  if (francePrefix !== "") return francePrefix;
+
+  const probableCountry = parseProbableCountry(input.digits);
+  if (probableCountry !== "") return probableCountry;
+
+  const france = parseFranceStructure(input);
+  if (france !== "") return france;
+
+  return "";
+}
+
+function getCountryRules(): CountryRule[] {
+  const data =
+    "1,US_CA_NANP,10,10,false;" +
+    "7,RU_KZ,10,10,false;" +
+    "20,EG,9,10,false;" +
+    "27,ZA,9,9,true;" +
+    "30,GR,10,10,false;" +
+    "31,NL,9,9,true;" +
+    "32,BE,8,9,true;" +
+    "33,FR,9,9,true;" +
+    "34,ES,9,9,false;" +
+    "36,HU,8,9,false;" +
+    "39,IT_VA,6,10,false;" +
+    "40,RO,9,9,true;" +
+    "41,CH,9,9,true;" +
+    "43,AT,4,13,false;" +
+    "44,GB_GG_IM_JE,9,10,true;" +
+    "45,DK,8,8,false;" +
+    "46,SE,7,13,true;" +
+    "47,NO_SJ,8,8,false;" +
+    "48,PL,9,9,false;" +
+    "49,DE,7,11,true;" +
+    "51,PE,8,9,false;" +
+    "52,MX,10,10,false;" +
+    "53,CU,8,8,false;" +
+    "54,AR,10,10,false;" +
+    "55,BR,10,11,false;" +
+    "56,CL,9,9,false;" +
+    "57,CO,10,10,false;" +
+    "58,VE,10,10,false;" +
+    "60,MY,7,10,false;" +
+    "61,AU_CC_CX,9,9,true;" +
+    "62,ID,8,12,false;" +
+    "63,PH,8,10,false;" +
+    "64,NZ,8,10,false;" +
+    "65,SG,8,8,false;" +
+    "66,TH,8,9,true;" +
+    "81,JP,9,10,true;" +
+    "82,KR,8,10,true;" +
+    "84,VN,9,10,true;" +
+    "86,CN,11,11,false;" +
+    "90,TR,10,10,true;" +
+    "91,IN,10,10,false;" +
+    "92,PK,10,10,true;" +
+    "93,AF,9,9,false;" +
+    "94,LK,9,9,true;" +
+    "95,MM,7,10,false;" +
+    "98,IR,10,10,true;" +
+    "211,SS,9,9,false;" +
+    "212,MA_EH,9,9,true;" +
+    "213,DZ,9,9,true;" +
+    "216,TN,8,8,false;" +
+    "218,LY,8,9,false;" +
+    "220,GM,7,7,false;" +
+    "221,SN,9,9,false;" +
+    "222,MR,8,8,false;" +
+    "223,ML,8,8,false;" +
+    "224,GN,9,9,false;" +
+    "225,CI,10,10,false;" +
+    "226,BF,8,8,false;" +
+    "227,NE,8,8,false;" +
+    "228,TG,8,8,false;" +
+    "229,BJ,8,8,false;" +
+    "230,MU,7,8,false;" +
+    "231,LR,7,9,false;" +
+    "232,SL,8,8,false;" +
+    "233,GH,9,9,true;" +
+    "234,NG,10,10,false;" +
+    "235,TD,8,8,false;" +
+    "236,CF,8,8,false;" +
+    "237,CM,9,9,false;" +
+    "238,CV,7,7,false;" +
+    "239,ST,7,7,false;" +
+    "240,GQ,9,9,false;" +
+    "241,GA,8,8,false;" +
+    "242,CG,9,9,false;" +
+    "243,CD,9,9,false;" +
+    "244,AO,9,9,false;" +
+    "245,GW,7,7,false;" +
+    "246,IO,7,7,false;" +
+    "247,AC,4,4,false;" +
+    "248,SC,7,7,false;" +
+    "249,SD,9,9,true;" +
+    "250,RW,9,9,false;" +
+    "251,ET,9,9,true;" +
+    "252,SO,7,9,false;" +
+    "253,DJ,8,8,false;" +
+    "254,KE,9,10,true;" +
+    "255,TZ,9,9,true;" +
+    "256,UG,9,9,true;" +
+    "257,BI,8,8,false;" +
+    "258,MZ,8,9,false;" +
+    "260,ZM,9,9,true;" +
+    "261,MG,9,9,true;" +
+    "262,RE_YT,9,9,false;" +
+    "263,ZW,5,9,true;" +
+    "264,NA,6,9,true;" +
+    "265,MW,7,9,false;" +
+    "266,LS,8,8,false;" +
+    "267,BW,7,8,false;" +
+    "268,SZ,8,8,false;" +
+    "269,KM,7,7,false;" +
+    "290,SH_TA,4,4,false;" +
+    "291,ER,7,7,false;" +
+    "297,AW,7,7,false;" +
+    "298,FO,6,6,false;" +
+    "299,GL,6,6,false;" +
+    "350,GI,8,8,false;" +
+    "351,PT,9,9,false;" +
+    "352,LU,8,11,false;" +
+    "353,IE,7,9,true;" +
+    "354,IS,7,9,false;" +
+    "355,AL,8,9,true;" +
+    "356,MT,8,8,false;" +
+    "357,CY,8,8,false;" +
+    "358,FI_AX,5,12,true;" +
+    "359,BG,7,9,true;" +
+    "370,LT,8,8,false;" +
+    "371,LV,8,8,false;" +
+    "372,EE,7,10,false;" +
+    "373,MD,8,8,false;" +
+    "374,AM,8,8,true;" +
+    "375,BY,9,9,false;" +
+    "376,AD,6,9,false;" +
+    "377,MC,5,9,false;" +
+    "378,SM,6,10,false;" +
+    "379,VA,15,15,false;" +
+    "380,UA,9,9,true;" +
+    "381,RS,8,9,true;" +
+    "382,ME,8,8,true;" +
+    "383,XK,8,8,false;" +
+    "385,HR,8,9,true;" +
+    "386,SI,8,8,true;" +
+    "387,BA,8,8,true;" +
+    "389,MK,8,8,true;" +
+    "420,CZ,9,9,false;" +
+    "421,SK,9,9,true;" +
+    "423,LI,7,9,false;" +
+    "500,FK_GS,5,15,false;" +
+    "501,BZ,7,7,false;" +
+    "502,GT,8,8,false;" +
+    "503,SV,8,8,false;" +
+    "504,HN,8,8,false;" +
+    "505,NI,8,8,false;" +
+    "506,CR,8,8,false;" +
+    "507,PA,7,8,false;" +
+    "508,PM,6,6,false;" +
+    "509,HT,8,8,false;" +
+    "590,GP_BL_MF,9,9,false;" +
+    "591,BO,8,8,false;" +
+    "592,GY,7,7,false;" +
+    "593,EC,8,9,true;" +
+    "594,GF,9,9,false;" +
+    "595,PY,6,9,true;" +
+    "596,MQ,9,9,false;" +
+    "597,SR,6,7,false;" +
+    "598,UY,8,8,false;" +
+    "599,CW_BQ,7,8,false;" +
+    "670,TL,7,8,false;" +
+    "672,NF_AQ,6,6,false;" +
+    "673,BN,7,7,false;" +
+    "674,NR,7,7,false;" +
+    "675,PG,7,8,false;" +
+    "676,TO,5,7,false;" +
+    "677,SB,5,7,false;" +
+    "678,VU,5,7,false;" +
+    "679,FJ,7,7,false;" +
+    "680,PW,7,7,false;" +
+    "681,WF,6,6,false;" +
+    "682,CK,5,5,false;" +
+    "683,NU,4,4,false;" +
+    "685,WS,5,7,false;" +
+    "686,KI,5,8,false;" +
+    "687,NC,6,6,false;" +
+    "688,TV,5,6,false;" +
+    "689,PF,6,8,false;" +
+    "690,TK,4,4,false;" +
+    "691,FM,7,7,false;" +
+    "692,MH,7,7,false;" +
+    "800,INTL_FREEPHONE,8,8,false;" +
+    "808,INTL_SHARED_COST,8,8,false;" +
+    "850,KP,6,10,false;" +
+    "852,HK,8,8,false;" +
+    "853,MO,8,8,false;" +
+    "855,KH,8,9,false;" +
+    "856,LA,8,10,false;" +
+    "870,INMARSAT,9,9,false;" +
+    "878,UPT,12,12,false;" +
+    "880,BD,6,10,true;" +
+    "881,GMSS,15,15,false;" +
+    "882,INTL_NETWORKS,15,15,false;" +
+    "883,INTL_NETWORKS,15,15,false;" +
+    "886,TW,8,9,true;" +
+    "888,UN_OCHA,15,15,false;" +
+    "960,MV,7,7,false;" +
+    "961,LB,7,8,true;" +
+    "962,JO,8,9,true;" +
+    "963,SY,8,9,true;" +
+    "964,IQ,8,10,true;" +
+    "965,KW,8,8,false;" +
+    "966,SA,8,9,true;" +
+    "967,YE,6,9,false;" +
+    "968,OM,8,8,false;" +
+    "970,PS,8,9,true;" +
+    "971,AE,8,9,true;" +
+    "972,IL,8,9,true;" +
+    "973,BH,8,8,false;" +
+    "974,QA,8,8,false;" +
+    "975,BT,7,8,false;" +
+    "976,MN,7,8,false;" +
+    "977,NP,8,10,false;" +
+    "979,IPRS,9,9,false;" +
+    "992,TJ,9,9,false;" +
+    "993,TM,8,8,false;" +
+    "994,AZ,8,9,true;" +
+    "995,GE,9,9,false;" +
+    "996,KG,9,9,false;" +
+    "998,UZ,9,9,false";
+
+  const rules: CountryRule[] = [];
+  const rows = data.split(";");
+
+  for (let i = 0; i < rows.length; i++) {
+    const parts = rows[i].split(",");
+    if (parts.length !== 5) continue;
+
+    rules.push({
+      code: parts[0],
+      iso: parts[1],
+      min: Number(parts[2]),
+      max: Number(parts[3]),
+      removeZero: parts[4] === "true"
+    });
+  }
+
+  return rules;
+}
+
+function parseExplicitCountry(input: ParsedInput): string {
+  let normalized = input.digits;
+
+  if (normalized.startsWith("00")) {
+    normalized = normalized.substring(2);
+  } else if (!input.cleaned.includes("+")) {
+    return "";
+  }
+
+  const parsed = parseCountryCode(normalized, true, false);
+  if (parsed) return formatParsedPhone(parsed);
+
+  if (input.extDigits !== "") {
+    const parsedWithExt = parseCountryCode(normalized + input.extDigits, true, false);
+    if (parsedWithExt) return formatParsedPhone(parsedWithExt);
+  }
+
+  const frShort = parseShortFranceFromInternational(normalized, input.extDigits);
+  if (frShort !== "") return frShort;
+
+  return "";
+}
+
+function parseShortFranceFromInternational(normalized: string, extDigits: string): string {
+  if (!normalized.startsWith("33")) return "";
+
+  let national = normalized.substring(2);
+  if (national.startsWith("0")) national = national.substring(1);
+
+  if (extDigits !== "") national = national + extDigits;
+
+  if (national.length >= 6 && national.length < 9) {
+    const candidate = ("0" + national).padEnd(10, "0");
+    return "[FR] " + formatFrance(candidate);
+  }
+
+  if (national.length === 9) {
+    return "[FR] " + formatFrance("0" + national);
+  }
+
+  return "";
+}
+
+function parseProbableCountry(digits: string): string {
+  if (digits.length < 11) return "";
+
+  const parsed = parseCountryCode(digits, false, false);
+  return parsed ? formatParsedPhone(parsed) : "";
+}
+
+function parseCountryCode(normalized: string, explicit: boolean, anomalyMode: boolean): ParsedPhone | null {
+  const rules = getCountryRules();
+  const candidates: { rule: CountryRule; national: string; score: number }[] = [];
+
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+
+    if (!normalized.startsWith(rule.code)) continue;
+
+    let national = normalized.substring(rule.code.length);
+
+    if (rule.removeZero && national.startsWith("0")) {
+      national = national.substring(1);
+    }
+
+    const maxAllowed = anomalyMode ? 15 - rule.code.length : rule.max;
+    const totalLength = rule.code.length + national.length;
+
+    if (totalLength > 15) continue;
+    if (national.length < rule.min) continue;
+    if (national.length > maxAllowed) continue;
+
+    candidates.push({
+      rule,
+      national,
+      score: scoreCountryCandidate(rule, national, explicit, anomalyMode)
+    });
+  }
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return b.rule.code.length - a.rule.code.length;
+  });
+
+  const best = candidates[0];
+
+  if (best.rule.code === "33" && !anomalyMode) {
+    const fr = normalizeFrenchCandidate(best.national);
+    if (fr !== "") {
+      return { countryCode: "33", iso: "FR", national: fr };
+    }
+  }
+
+  if (best.rule.code === "1") {
+    const npa = best.national.substring(0, 3);
+    return {
+      countryCode: "1",
+      iso: getNanpNpaIso(npa),
+      national: best.national
+    };
+  }
+
+  return {
+    countryCode: best.rule.code,
+    iso: best.rule.iso,
+    national: best.national
+  };
+}
+
+function scoreCountryCandidate(rule: CountryRule, national: string, explicit: boolean, anomalyMode: boolean): number {
+  let score = 0;
+
+  if (explicit) score += 50;
+  if (national.length === rule.max) score += 100;
+  if (national.length >= rule.min && national.length <= rule.max) score += 60;
+
+  const diff = Math.abs(rule.max - national.length);
+  score += Math.max(0, 30 - diff * 10);
+
+  if (anomalyMode) score -= 10;
+  if (rule.code === "33" && normalizeFrenchCandidate(national) !== "") score += 40;
+
+  return score;
+}
+
+function getNanpNpaIso(npa: string): string {
+  const data =
+    "242,BS;246,BB;264,AI;268,AG;284,VG;340,VI;345,KY;441,BM;473,GD;" +
+    "649,TC;658,JM;664,MS;670,MP;671,GU;684,AS;721,SX;758,LC;767,DM;" +
+    "784,VC;787,PR;800,NANP_TOLL_FREE;809,DO;822,NANP_TOLL_FREE;" +
+    "829,DO;833,NANP_TOLL_FREE;844,NANP_TOLL_FREE;849,DO;855,NANP_TOLL_FREE;" +
+    "866,NANP_TOLL_FREE;868,TT;869,KN;876,JM;877,NANP_TOLL_FREE;" +
+    "888,NANP_TOLL_FREE;900,NANP_PREMIUM;939,PR";
+
+  const rows = data.split(";");
+  for (let i = 0; i < rows.length; i++) {
+    const parts = rows[i].split(",");
+    if (parts.length === 2 && parts[0] === npa) return parts[1];
+  }
+
+  return "US_CA_NANP";
+}
+
+function parseFrancePrefixAnomaly(digits: string): string {
+  if (digits.startsWith("330")) {
+    const corrected = normalizeFrenchCandidate(digits.substring(2));
+    if (corrected !== "") return "[FR] " + formatFrance(corrected);
+  }
+
+  if (digits.startsWith("33")) {
+    const corrected = normalizeFrenchCandidate(digits.substring(2));
+    if (corrected !== "") return "[FR] " + formatFrance(corrected);
+  }
+
+  return "";
+}
+
+function parseFranceStructure(input: ParsedInput): string {
+  const digits = input.digits;
+
+  const direct = digits.match(/0[1-9]\d{8}/);
+  if (direct && direct.index !== undefined) {
+    const main = direct[0];
+    const remainder = digits.substring(direct.index + main.length);
+
+    if (remainder.length > 0 || input.extDigits !== "") {
+      const ext = remainder + input.extDigits;
+      return "[FR] " + formatFrance(main) + (ext ? " ext " + ext : "");
+    }
+
+    return "[FR] " + formatFrance(main);
+  }
+
+  if (/^[1-9]\d{8}$/.test(digits)) {
+    return "[FR] " + formatFrance("0" + digits);
+  }
+
+  if (digits.length === 10 && /^[1-9][1-9]\d{8}$/.test(digits)) {
+    return "[FR] " + formatFrance("0" + digits.substring(1));
+  }
+
+  if (digits.length === 8) {
+    return "[FR] " + formatFrance(("0" + digits).padEnd(10, "0"));
+  }
+
+  return "";
+}
+
+function formatVirtualNumber(digits: string, extDigits: string): string {
+  const allDigits = digits + extDigits;
+
+  if (allDigits.length === 0) return "";
+
+  const prefix = allDigits.substring(0, 4);
+  const rest = allDigits.substring(4);
+
+  return rest
+    ? "[VNUM] +" + prefix + " " + rest
+    : "[VNUM] +" + prefix;
+}
+
+function normalizeFrenchCandidate(candidate: string): string {
+  if (/^0[1-9]\d{8}$/.test(candidate)) return candidate;
+  if (/^[1-9]\d{8}$/.test(candidate)) return "0" + candidate;
+  if (/^0[1-9]\d{7}$/.test(candidate)) return candidate.padEnd(10, "0");
+  if (/^[1-9]\d{7}$/.test(candidate)) return ("0" + candidate).padEnd(10, "0");
+
+  return "";
+}
+
+function formatParsedPhone(parsed: ParsedPhone): string {
+  const formatted = formatCountryNumber(parsed.countryCode, parsed.national);
+  if (formatted !== "") return "[" + parsed.iso + "] " + formatted;
+
+  return "[" + parsed.iso + "] +" + parsed.countryCode + " " + parsed.national;
+}
+
+function formatCountryNumber(countryCode: string, national: string): string {
+  if (countryCode === "33") {
+    const fr = normalizeFrenchCandidate(national);
+    if (fr !== "") return formatFrance(fr);
+  }
+
+  if (countryCode === "1" && national.length === 10) {
+    return "(" + national.substring(0, 3) + ") " +
+      national.substring(3, 6) + "-" +
+      national.substring(6);
+  }
+
+  if (countryCode === "32" && national.length >= 8 && national.length <= 9) {
+    const n = "0" + national;
+    if (n.length === 10) return groupByPattern(n, [4, 2, 2, 2]);
+    if (n.length === 9) return groupByPattern(n, [2, 3, 2, 2]);
+  }
+
+  return "";
+}
+
+function groupByPattern(value: string, pattern: number[]): string {
+  const groups: string[] = [];
+  let index = 0;
+
+  for (let i = 0; i < pattern.length; i++) {
+    if (index >= value.length) break;
+    groups.push(value.substring(index, index + pattern[i]));
+    index += pattern[i];
+  }
+
+  if (index < value.length) groups.push(value.substring(index));
+
+  return groups.join(" ");
+}
+
+function chooseBestSource(rawText: string, displayText: string): string {
+  const rawDigits = rawText.replace(/\D/g, "");
+  const displayDigits = displayText.replace(/\D/g, "");
+
+  if (/[eE]/.test(rawText)) return rawText;
+  if (rawDigits.length >= displayDigits.length) return rawText;
+
+  return displayText;
+}
+
+function normalizeScientificNotation(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^([+-]?\d+)([,.](\d+))?[eE]([+-]?\d+)$/);
+  if (!match) return value;
+
+  const integerPart = match[1].replace("+", "");
+  const decimalPart = match[3] ? match[3] : "";
+  const exponent = Number(match[4]);
+
+  const rawDigits = integerPart + decimalPart;
+  const shift = exponent - decimalPart.length;
+
+  if (shift >= 0) return rawDigits + "0".repeat(shift);
+
+  const position = rawDigits.length + shift;
+  if (position <= 0) return "0";
+
+  return rawDigits.substring(0, position);
+}
+
+function formatFrance(digits: string): string {
+  return digits.replace(
+    /(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/,
+    "$1 $2 $3 $4 $5"
+  );
+}

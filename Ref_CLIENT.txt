@@ -1,0 +1,62 @@
+function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getActiveWorksheet();
+  const usedRange = sheet.getUsedRange();
+  if (!usedRange) return;
+
+  const values = usedRange.getValues();
+  const headers = values[0].map(v => String(v).trim().toLowerCase());
+
+  const refCol = headers.indexOf("reference client");
+  const factureCol = headers.indexOf("facture");
+
+  if (refCol === -1) {
+    throw new Error("Colonne 'Reference client' introuvable.");
+  }
+
+  for (let i = 1; i < values.length; i++) {
+    const rawRef = values[i][refCol];
+
+    if (rawRef === null || rawRef === undefined || rawRef === "") {
+      continue;
+    }
+
+    let text = String(rawRef)
+      .trim()
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    // Corrige les décimales type 80000085.0 ou 80000085,0
+    text = text.replace(/(\d{8})[.,]0+\b/g, "$1");
+
+    let digits = (text.match(/\d/g) || []).join("");
+
+    // Si une facture contient un numéro client fiable, on le privilégie
+    if (factureCol !== -1) {
+      const rawFacture = values[i][factureCol];
+
+      if (rawFacture !== null && rawFacture !== undefined && rawFacture !== "") {
+        const factureText = String(rawFacture).toUpperCase();
+        const factureMatch = factureText.match(/MVT[-_ ]?(\d{8})/);
+
+        if (factureMatch) {
+          digits = factureMatch[1];
+        }
+      }
+    }
+
+    // Sécurité : 800000850 vient souvent de 80000085.0
+    if (digits.length === 9 && digits.endsWith("0")) {
+      digits = digits.substring(0, 8);
+    }
+
+    // On garde uniquement les 8 premiers chiffres exploitables
+    if (digits.length > 8) {
+      digits = digits.substring(0, 8);
+    }
+
+    values[i][refCol] = digits;
+  }
+
+  usedRange.setValues(values);
+}

@@ -1,0 +1,286 @@
+function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getActiveWorksheet();
+  const range = sheet.getUsedRange();
+  if (!range) return;
+
+  const values = range.getValues();
+  const headers = values[0].map(v => String(v).trim());
+
+  const addressCol = headers.indexOf("Adresse");
+  if (addressCol === -1) throw new Error('Colonne "Adresse" introuvable.');
+
+  for (let r = 1; r < values.length; r++) {
+    sheet.getCell(r, addressCol).setValue(cleanAddress(values[r][addressCol]));
+  }
+
+  sheet.getUsedRange()?.getFormat().autofitColumns();
+}
+
+function cleanAddress(value: string | number | boolean): string {
+  if (value === null || value === undefined) return "";
+
+  let text = normalize(fixEncoding(String(value)));
+  if (isInvalid(text)) return "";
+
+  text = removeAddressPrefix(text);
+  text = cleanCedexSuffix(text);
+  text = removeCountrySuffix(text);
+  text = normalize(text);
+
+  if (isInvalid(text) || isClearlyNonStandard(text)) return "";
+
+  const split = splitStreetCity(text);
+  const parsed = parseStreet(split.street);
+
+  if (!parsed.number || !parsed.type || !parsed.name) return "";
+
+  let result = `${parsed.number} ${parsed.type} ${parsed.name}`;
+  if (parsed.extra) result += ` ${parsed.extra}`;
+  if (split.city) result += `, ${smartTitle(split.city)}`;
+
+  return normalize(result);
+}
+
+function fixEncoding(text: string): string {
+  const replacements: { [key: string]: string } = {
+    "Ã©": "é", "Ã¨": "è", "Ãª": "ê", "Ã«": "ë",
+    "Ã ": "à", "Ã¢": "â", "Ã¤": "ä",
+    "Ã®": "î", "Ã¯": "ï",
+    "Ã´": "ô", "Ã¶": "ö",
+    "Ã¹": "ù", "Ã»": "û", "Ã¼": "ü",
+    "Ã§": "ç",
+    "Ã‰": "É", "Ãˆ": "È", "ÃŠ": "Ê",
+    "Å“": "œ",
+    "â€™": "'", "â€˜": "'",
+    "â€œ": "\"", "â€": "\"",
+    "Â": ""
+  };
+
+  for (const bad in replacements) {
+    text = text.split(bad).join(replacements[bad]);
+  }
+
+  return text;
+}
+
+function normalize(text: string): string {
+  return text
+    .replace(/\u00a0/g, " ")
+    .replace(/[;|]/g, ",")
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/\s*-\s*/g, " - ")
+    .replace(/\s+/g, " ")
+    .replace(/^[ ,;.-]+|[ ,;.-]+$/g, "");
+}
+
+function removeAddressPrefix(text: string): string {
+  return normalize(
+    text.replace(
+      /^(adresse principale|adresse secondaire|adresse facturation|adresse livraison|adresse|address|main address)\s*:\s*/i,
+      ""
+    )
+  );
+}
+
+function cleanCedexSuffix(text: string): string {
+  return normalize(text.replace(/\bcedex\s*\d*\b/gi, ""));
+}
+
+function removeCountrySuffix(text: string): string {
+  const countries = [
+    "fr", "france", "uk", "united kingdom", "gb", "usa", "us",
+    "united states", "canada", "spain", "espagne", "germany",
+    "deutschland", "italy", "italie", "belgium", "belgique",
+    "switzerland", "suisse", "portugal", "netherlands", "pays bas"
+  ];
+
+  const parts = text.split(",").map(p => normalize(p)).filter(p => p !== "");
+
+  while (parts.length > 1 && countries.includes(toKey(parts[parts.length - 1]))) {
+    parts.pop();
+  }
+
+  if (parts.length > 1) {
+    const words = parts[parts.length - 1].split(" ");
+    const lastWord = toKey(words[words.length - 1]);
+
+    if (countries.includes(lastWord)) {
+      words.pop();
+      parts[parts.length - 1] = normalize(words.join(" "));
+    }
+  }
+
+  return parts.join(", ");
+}
+
+function isInvalid(text: string): boolean {
+  return (
+    text === "" ||
+    /^(nan|none|null|n\/a|na|adresse inconnue|unknown address|inconnu|inconnue|adresse)$/i.test(text) ||
+    /^\d{1,6}([ -]?[A-Z]{2})?$/i.test(text)
+  );
+}
+
+function isClearlyNonStandard(text: string): boolean {
+  return (
+    /^(bp|b\.p\.|boite postale|boîte postale|case postale|po box|p\.o\. box|post office box)\b/i.test(text) ||
+    /^(lieu[- ]dit|ld|hameau|mas|domaine|ferme|moulin|chateau|château)\b/i.test(text) ||
+    /^(za|zi|zac|z\.a\.|z\.i\.|parc d.?activit|zone industrielle|zone artisanale|zone commerciale)\b/i.test(text)
+  );
+}
+
+function splitStreetCity(text: string): { street: string; city: string } {
+  if (text.includes(",")) {
+    const parts = text.split(",").map(p => normalize(p)).filter(p => p !== "");
+    return {
+      street: parts.slice(0, -1).join(", "),
+      city: parts[parts.length - 1] ?? ""
+    };
+  }
+
+  const dashParts = text.split(" - ").map(p => normalize(p)).filter(p => p !== "");
+  if (dashParts.length >= 2) {
+    return {
+      street: dashParts[0],
+      city: dashParts.slice(1).join(" ")
+    };
+  }
+
+  const knownCities = [
+    "paris", "lyon", "marseille", "lille", "nantes", "nice",
+    "toulouse", "bordeaux", "rennes", "strasbourg", "montpellier",
+    "grenoble", "dijon", "rouen", "reims", "angers", "tours",
+    "cannes", "nancy", "metz", "limoges", "amiens", "caen",
+    "besancon", "besançon", "orleans", "orléans", "perpignan",
+    "roubaix", "tourcoing", "avignon", "poitiers", "pau"
+  ];
+
+  const key = toKey(text);
+
+  for (const city of knownCities.sort((a, b) => b.length - a.length)) {
+    if (key.endsWith(" " + toKey(city))) {
+      return {
+        street: normalize(text.slice(0, text.length - city.length)),
+        city
+      };
+    }
+  }
+
+  return { street: text, city: "" };
+}
+
+function parseStreet(street: string): {
+  number: string;
+  type: string;
+  name: string;
+  extra: string;
+} {
+  const aliases: { [key: string]: string } = {
+    "r": "Rue", "rue": "Rue",
+    "av": "Avenue", "ave": "Avenue", "avenue": "Avenue",
+    "bd": "Boulevard", "boul": "Boulevard", "boulevard": "Boulevard",
+    "pl": "Place", "place": "Place",
+    "rte": "Route", "route": "Route",
+    "ch": "Chemin", "chem": "Chemin", "chemin": "Chemin",
+    "imp": "Impasse", "impasse": "Impasse",
+    "allee": "Allée", "allée": "Allée",
+    "quai": "Quai", "cours": "Cours", "passage": "Passage",
+    "square": "Square",
+    "rond-point": "Rond-point",
+    "street": "Street", "st": "Street",
+    "road": "Road", "rd": "Road",
+    "drive": "Drive", "dr": "Drive",
+    "lane": "Lane", "ln": "Lane",
+    "way": "Way", "court": "Court",
+    "calle": "Calle", "camino": "Camino", "plaza": "Plaza",
+    "rua": "Rua", "estrada": "Estrada",
+    "strasse": "Strasse", "straße": "Straße", "weg": "Weg", "platz": "Platz"
+  };
+
+  street = normalize(street);
+
+  const match = street.match(/^(\d+[A-Za-z]?(?:[-/]\d+[A-Za-z]?)?)\s+(.+)$/);
+  if (!match) return { number: "", type: "", name: "", extra: "" };
+
+  const number = match[1];
+  let rest = normalize(match[2]);
+
+  const extraMatch = rest.match(/\b(appartement|appart|appt|apt|batiment|bâtiment|bat|bis|ter|etage|étage|porte)\s*[A-Za-z0-9 -]*$/i);
+  let extra = "";
+
+  if (extraMatch) {
+    extra = smartTitle(extraMatch[0]);
+    rest = normalize(rest.replace(extraMatch[0], ""));
+  }
+
+  const words = rest.split(" ");
+
+  const first = toKey(words[0]);
+  if (aliases[first]) {
+    return {
+      number,
+      type: aliases[first],
+      name: smartTitle(words.slice(1).join(" ")),
+      extra
+    };
+  }
+
+  const last = toKey(words[words.length - 1]);
+  if (aliases[last]) {
+    return {
+      number,
+      type: aliases[last],
+      name: smartTitle(words.slice(0, -1).join(" ")),
+      extra
+    };
+  }
+
+  return { number: "", type: "", name: "", extra: "" };
+}
+
+function smartTitle(text: string): string {
+  const particles = [
+    "de", "du", "des", "la", "le", "les", "l", "d",
+    "del", "della", "di", "da", "of", "the", "and", "van", "von"
+  ];
+
+  return normalize(text)
+    .split(" ")
+    .map((word, index) => {
+      const key = toKey(word);
+      if (index > 0 && particles.includes(key)) return key;
+      if (/^[A-Z]{2,}$/.test(word) && word.length <= 4) return word;
+
+      if (word.includes("'") || word.includes("’")) {
+        return word
+          .replace("’", "'")
+          .split("'")
+          .map((p, i) => {
+            if (i === 0 && ["l", "d"].includes(toKey(p))) return p.toLowerCase();
+            return capitalize(p);
+          })
+          .join("'");
+      }
+
+      if (word.includes("-")) {
+        return word.split("-").map(p => capitalize(p)).join("-");
+      }
+
+      return capitalize(word);
+    })
+    .join(" ");
+}
+
+function capitalize(word: string): string {
+  if (word === "") return "";
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+function toKey(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/\.$/, "");
+}

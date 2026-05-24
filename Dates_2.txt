@@ -1,0 +1,122 @@
+function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getActiveWorksheet();
+  const rowCount = sheet.getUsedRange().getRowCount();
+
+  const range = sheet.getRange(`H2:I${rowCount}`);
+  const values = range.getValues();
+
+  const months: { [key: string]: number } = {
+    january: 1, jan: 1, janvier: 1,
+    february: 2, feb: 2, février: 2, fevrier: 2,
+    march: 3, mar: 3, mars: 3,
+    april: 4, apr: 4, avril: 4,
+    may: 5, mai: 5,
+    june: 6, jun: 6, juin: 6,
+    july: 7, jul: 7, juillet: 7,
+    august: 8, aug: 8, août: 8, aout: 8,
+    september: 9, sep: 9, septembre: 9,
+    october: 10, oct: 10, octobre: 10,
+    november: 11, nov: 11, novembre: 11,
+    december: 12, dec: 12, décembre: 12, decembre: 12
+  };
+
+  function toExcelDate(year: number, month: number, day: number): number | null {
+    if (year < 100) year += 2000;
+    if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1) return null;
+
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    if (day > lastDay) day = lastDay;
+
+    return Date.UTC(year, month - 1, day) / 86400000 + 25569;
+  }
+
+  function parseDate(value: string | number | boolean): number | null {
+    if (value === "" || value === false) return null;
+
+    if (typeof value === "number") {
+      if (value > 30000 && value < 60000) return value;
+
+      // Timestamp Unix en secondes
+      if (value > 1000000000 && value < 4102444800) {
+        return value / 86400 + 25569;
+      }
+    }
+
+    let text = value.toString().trim().toLowerCase()
+      .replace(/\s+/g, " ")
+      .replace(/\butc\b/g, "")
+      .replace(/\bgmt\b/g, "")
+      .replace(/\bz\b/g, "")
+      .replace(/,/g, "")
+      .trim();
+
+    if (text === "") return null;
+
+    // Timestamp Unix en secondes en texte
+    if (/^\d{10}$/.test(text)) {
+      return Number(text) / 86400 + 25569;
+    }
+
+    if (text.includes("t")) text = text.split("t")[0];
+
+    const dateOnlyMatch = text.match(/^(\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4})/);
+    if (dateOnlyMatch !== null) text = dateOnlyMatch[1];
+
+    if (/^\d{8}$/.test(text)) {
+      return toExcelDate(
+        Number(text.substring(0, 4)),
+        Number(text.substring(4, 6)),
+        Number(text.substring(6, 8))
+      );
+    }
+
+    const words = text.split(" ");
+    if (words.length === 3 && months[words[1]] !== undefined) {
+      return toExcelDate(Number(words[2]), months[words[1]], Number(words[0]));
+    }
+
+    const sepMatch = text.match(/[\/\-.]/);
+    if (sepMatch === null) return null;
+
+    const sep = sepMatch[0];
+    const parts = text.split(sep);
+    if (parts.length !== 3) return null;
+
+    const a = Number(parts[0]);
+    const b = Number(parts[1]);
+    const c = Number(parts[2]);
+
+    if (isNaN(a) || isNaN(b) || isNaN(c)) return null;
+
+    if (parts[0].length === 4) {
+      if (b <= 12) return toExcelDate(a, b, c);
+      if (b > 12 && c <= 12) return toExcelDate(a, c, b);
+      return null;
+    }
+
+    if (a > 12) return toExcelDate(c, b, a);
+    if (b > 12) return toExcelDate(c, a, b);
+
+    return toExcelDate(c, b, a);
+  }
+
+  for (let i = 0; i < values.length; i++) {
+    let ouverture = parseDate(values[i][0]);
+    let fermeture = parseDate(values[i][1]);
+
+    if (ouverture === null && fermeture !== null) ouverture = fermeture;
+    if (fermeture === null && ouverture !== null) fermeture = ouverture;
+
+    if (ouverture !== null && fermeture !== null && ouverture > fermeture) {
+      const temp = ouverture;
+      ouverture = fermeture;
+      fermeture = temp;
+    }
+
+    values[i][0] = ouverture === null ? "" : ouverture;
+    values[i][1] = fermeture === null ? "" : fermeture;
+  }
+
+  range.setValues(values);
+  range.setNumberFormat("dd/mm/yyyy");
+}

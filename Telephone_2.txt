@@ -1,0 +1,72 @@
+function main(workbook: ExcelScript.Workbook) {
+    const sheet = workbook.getActiveWorksheet();
+    const usedRange = sheet.getUsedRange();
+    if (!usedRange) return;
+
+    const rowCount = usedRange.getRowCount();
+    const range = sheet.getRangeByIndexes(1, 5, rowCount - 1, 1); // Colonne F
+
+    range.setNumberFormatLocal("@");
+
+    const values = range.getValues();
+
+    for (let i = 0; i < values.length; i++) {
+        let raw = values[i][0];
+        if (raw === null || raw === undefined || raw === "") continue;
+
+        let phone = String(raw).trim();
+
+        phone = phone.replace(/\b(poste|ext|extension)\s*\d+\s*:/gi, "");
+        phone = phone.replace(/\b(poste|ext|extension)\s*\d+\b/gi, "");
+
+        let digits = phone.replace(/\D/g, "");
+
+        if (/0{6,}/.test(digits)) {
+            values[i][0] = "";
+            continue;
+        }
+
+        if (digits.startsWith("00330") && digits.length >= 14) {
+            digits = digits.substring(4);
+        } else if (digits.startsWith("0033") && digits.length >= 13) {
+            digits = "0" + digits.substring(4);
+        } else if (digits.startsWith("330") && digits.length >= 12) {
+            digits = digits.substring(2);
+        } else if (digits.startsWith("33") && digits.length >= 11) {
+            digits = "0" + digits.substring(2);
+        } else if (
+            (digits.startsWith("32") || digits.startsWith("44")) &&
+            digits.length >= 11
+        ) {
+            digits = "0" + digits.substring(2);
+        }
+
+        if (digits.length > 10) {
+            const match = digits.match(/0\d{9}/);
+            digits = match ? match[0] : digits.slice(-10);
+        }
+
+        // Correction des numéros où Excel a supprimé le 0 initial
+        if (digits.length === 9) {
+            digits = "0" + digits;
+        }
+
+        // Après toutes les corrections possibles : si moins de 10 chiffres => vide
+        if (digits.length < 10) {
+            values[i][0] = "";
+            continue;
+        }
+
+        if (digits.length === 10) {
+            digits = digits.replace(
+                /(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/,
+                "$1 $2 $3 $4 $5"
+            );
+        }
+
+        values[i][0] = digits;
+    }
+
+    range.setValues(values);
+    console.log("Correction robuste des numéros terminée.");
+}
