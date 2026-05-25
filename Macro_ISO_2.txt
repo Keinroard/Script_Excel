@@ -1,0 +1,380 @@
+Option Explicit
+
+Sub ComparerExcelAvecTxt_Detail()
+
+    Dim wbResultat As Workbook
+    Dim wsResultat As Worksheet
+    Dim dossier As String
+    Dim nomFichier As String
+    Dim cheminComplet As String
+    Dim wbSource As Workbook
+    Dim ws As Worksheet
+    
+    Dim totalLignesExcel As Long
+    Dim totalLignesTxt As Long
+    Dim totalDonneesExcel As Long
+    Dim totalDonneesTxt As Long
+    
+    Dim nbLignesFichier As Long
+    Dim nbEntetesExcel As Long
+    Dim nbEntetesTxt As Long
+    
+    Dim ligneDetail As Long
+    Dim ligneTotaux As Long
+    Dim cheminTxt As String
+    Dim nomTxt As String
+    Dim aEntete As Boolean
+
+    On Error GoTo GestionErreur
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.EnableEvents = False
+
+    Set wbResultat = ActiveWorkbook
+    Set wsResultat = wbResultat.Worksheets(1)
+
+    dossier = wbResultat.Path
+
+    If dossier = "" Then
+        MsgBox "Veuillez enregistrer le fichier résultat avant exécution.", vbExclamation
+        GoTo Fin
+    End If
+
+    dossier = dossier & "\"
+
+    wsResultat.Cells.Clear
+
+    wsResultat.Range("A3").Value = "Nom du Fichier"
+    wsResultat.Range("B3").Value = "Lignes"
+    wsResultat.Range("C3").Value = "Entêtes détectées"
+
+    ligneDetail = 4
+
+    ' ============================
+    ' Lecture des fichiers Excel
+    ' ============================
+    nomFichier = Dir(dossier & "*.xls*")
+
+    Do While nomFichier <> ""
+
+        If nomFichier <> wbResultat.Name _
+        And Left(nomFichier, 2) <> "~$" Then
+
+            cheminComplet = dossier & nomFichier
+
+            Set wbSource = Workbooks.Open( _
+                Filename:=cheminComplet, _
+                ReadOnly:=True, _
+                UpdateLinks:=False)
+
+            Set ws = wbSource.Worksheets(1)
+
+            nbLignesFichier = CompterLignesExcel(ws)
+            aEntete = FeuilleAEntete(ws)
+
+            totalLignesExcel = totalLignesExcel + nbLignesFichier
+
+            If aEntete Then
+                nbEntetesExcel = nbEntetesExcel + 1
+                totalDonneesExcel = totalDonneesExcel + Application.Max(nbLignesFichier - 1, 0)
+            Else
+                totalDonneesExcel = totalDonneesExcel + nbLignesFichier
+            End If
+
+            wsResultat.Cells(ligneDetail, 1).Value = nomFichier
+            wsResultat.Cells(ligneDetail, 2).Value = nbLignesFichier
+            wsResultat.Cells(ligneDetail, 3).Value = IIf(aEntete, "OUI", "NON")
+
+            ligneDetail = ligneDetail + 1
+
+            wbSource.Close SaveChanges:=False
+            Set wbSource = Nothing
+
+        End If
+
+        nomFichier = Dir()
+
+    Loop
+
+    ' ============================
+    ' Lecture des fichiers CSV
+    ' ============================
+    nomFichier = Dir(dossier & "*.csv")
+
+    Do While nomFichier <> ""
+
+        If nomFichier <> wbResultat.Name _
+        And Left(nomFichier, 2) <> "~$" Then
+
+            cheminComplet = dossier & nomFichier
+
+            nbLignesFichier = CompterLignesTxt(cheminComplet)
+            aEntete = TxtAEntete(cheminComplet)
+
+            totalLignesExcel = totalLignesExcel + nbLignesFichier
+
+            If aEntete Then
+                nbEntetesExcel = nbEntetesExcel + 1
+                totalDonneesExcel = totalDonneesExcel + Application.Max(nbLignesFichier - 1, 0)
+            Else
+                totalDonneesExcel = totalDonneesExcel + nbLignesFichier
+            End If
+
+            wsResultat.Cells(ligneDetail, 1).Value = nomFichier
+            wsResultat.Cells(ligneDetail, 2).Value = nbLignesFichier
+            wsResultat.Cells(ligneDetail, 3).Value = IIf(aEntete, "OUI", "NON")
+
+            ligneDetail = ligneDetail + 1
+
+        End If
+
+        nomFichier = Dir()
+
+    Loop
+
+    ' ============================
+    ' Recherche TXT référence
+    ' ============================
+    nomTxt = Dir(dossier & "*.txt")
+
+    If nomTxt = "" Then
+        MsgBox "Aucun fichier TXT trouvé dans :" & vbCrLf & dossier, vbExclamation
+        GoTo Fin
+    End If
+
+    cheminTxt = dossier & nomTxt
+
+    totalLignesTxt = CompterLignesTxt(cheminTxt)
+
+    If TxtAEntete(cheminTxt) Then
+        nbEntetesTxt = 1
+        totalDonneesTxt = Application.Max(totalLignesTxt - 1, 0)
+    Else
+        nbEntetesTxt = 0
+        totalDonneesTxt = totalLignesTxt
+    End If
+
+    ligneTotaux = ligneDetail + 1
+
+    wsResultat.Cells(ligneTotaux, 1).Value = "Total données Excel"
+    wsResultat.Cells(ligneTotaux, 2).Value = totalDonneesExcel
+
+    wsResultat.Cells(ligneTotaux + 1, 1).Value = "Total données TXT"
+    wsResultat.Cells(ligneTotaux + 1, 2).Value = totalDonneesTxt
+
+    With wsResultat.Range("A1")
+        If totalDonneesExcel = totalDonneesTxt Then
+            .Value = "ISO"
+            .Font.Color = RGB(0, 176, 80)
+        Else
+            .Value = "KO"
+            .Font.Color = RGB(255, 0, 0)
+        End If
+        
+        .Font.Size = 48
+        .Font.Bold = True
+    End With
+
+    ' ============================
+    ' Mise en page résultat
+    ' ============================
+    With wsResultat
+
+        .Cells.ClearFormats
+
+        .Rows.RowHeight = 15
+        .Rows(1).RowHeight = 96
+
+        .Columns("A").ColumnWidth = 52
+        .Columns("B").ColumnWidth = 20
+        .Columns("C").ColumnWidth = 20
+
+        With .Range("A1")
+            .Interior.Color = RGB(242, 242, 242)
+            .Borders.LineStyle = xlContinuous
+            .Borders.Weight = xlThin
+            .HorizontalAlignment = xlLeft
+            .VerticalAlignment = xlCenter
+            
+            If totalDonneesExcel = totalDonneesTxt Then
+                .Font.Color = RGB(0, 176, 80)
+            Else
+                .Font.Color = RGB(255, 0, 0)
+            End If
+            
+            .Font.Size = 48
+            .Font.Bold = True
+        End With
+
+        With .Range("B1:C1")
+            .ClearContents
+            .ClearFormats
+            .Borders.LineStyle = xlNone
+            .Interior.Pattern = xlNone
+        End With
+
+        With .Range("A3:C3")
+            .Interior.Color = RGB(217, 225, 242)
+            .Font.Bold = True
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+            .Borders.Weight = xlThin
+        End With
+
+        If ligneDetail > 4 Then
+            With .Range("A4:C" & ligneDetail - 1)
+                .Borders.LineStyle = xlContinuous
+                .Borders.Weight = xlThin
+                .VerticalAlignment = xlCenter
+            End With
+
+            .Range("A4:A" & ligneDetail - 1).HorizontalAlignment = xlLeft
+            .Range("B4:C" & ligneDetail - 1).HorizontalAlignment = xlCenter
+        End If
+
+        With .Range("A" & ligneTotaux & ":B" & ligneTotaux + 1)
+            .Font.Bold = True
+            .Interior.Color = RGB(242, 242, 242)
+            .Borders.LineStyle = xlContinuous
+            .Borders.Weight = xlThin
+            .VerticalAlignment = xlCenter
+        End With
+
+        .Range("B" & ligneTotaux & ":B" & ligneTotaux + 1).HorizontalAlignment = xlCenter
+
+        .Range("D:XFD").Clear
+        ActiveWindow.DisplayGridlines = True
+
+    End With
+
+    MsgBox "Contrôle terminé : " & wsResultat.Range("A1").Value, vbInformation
+
+Fin:
+    On Error Resume Next
+
+    If Not wbSource Is Nothing Then
+        wbSource.Close SaveChanges:=False
+    End If
+
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.EnableEvents = True
+
+    Exit Sub
+
+GestionErreur:
+    MsgBox "Erreur : " & Err.Description, vbCritical
+    Resume Fin
+
+End Sub
+
+
+Function CompterLignesExcel(ByVal ws As Worksheet) As Long
+
+    If Application.WorksheetFunction.CountA(ws.Cells) = 0 Then
+        CompterLignesExcel = 0
+    Else
+        CompterLignesExcel = ws.Cells.Find( _
+            What:="*", _
+            After:=ws.Cells(1, 1), _
+            LookIn:=xlFormulas, _
+            LookAt:=xlPart, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlPrevious).Row
+    End If
+
+End Function
+
+
+Function FeuilleAEntete(ByVal ws As Worksheet) As Boolean
+
+    Dim valeurA1 As String
+
+    valeurA1 = Trim(CStr(ws.Range("A1").Value))
+
+    If valeurA1 = "" Then
+        FeuilleAEntete = False
+    ElseIf IsNumeric(valeurA1) Then
+        FeuilleAEntete = False
+    Else
+        FeuilleAEntete = True
+    End If
+
+End Function
+
+
+Function CompterLignesTxt(ByVal cheminTxt As String) As Long
+
+    Dim numFichier As Integer
+    Dim ligne As String
+    Dim compteur As Long
+
+    numFichier = FreeFile
+
+    Open cheminTxt For Input As #numFichier
+
+    Do Until EOF(numFichier)
+        Line Input #numFichier, ligne
+        compteur = compteur + 1
+    Loop
+
+    Close #numFichier
+
+    CompterLignesTxt = compteur
+
+End Function
+
+
+Function TxtAEntete(ByVal cheminTxt As String) As Boolean
+
+    Dim numFichier As Integer
+    Dim premiereLigne As String
+    Dim premierChamp As String
+    Dim positionSeparateur As Long
+
+    numFichier = FreeFile
+
+    Open cheminTxt For Input As #numFichier
+
+    If Not EOF(numFichier) Then
+        Line Input #numFichier, premiereLigne
+    End If
+
+    Close #numFichier
+
+    premiereLigne = Trim(premiereLigne)
+
+    If premiereLigne = "" Then
+        TxtAEntete = False
+        Exit Function
+    End If
+
+    positionSeparateur = InStr(1, premiereLigne, vbTab)
+
+    If positionSeparateur = 0 Then
+        positionSeparateur = InStr(1, premiereLigne, ";")
+    End If
+
+    If positionSeparateur = 0 Then
+        positionSeparateur = InStr(1, premiereLigne, ",")
+    End If
+
+    If positionSeparateur > 0 Then
+        premierChamp = Left(premiereLigne, positionSeparateur - 1)
+    Else
+        premierChamp = premiereLigne
+    End If
+
+    premierChamp = Trim(premierChamp)
+
+    If premierChamp = "" Then
+        TxtAEntete = False
+    ElseIf IsNumeric(premierChamp) Then
+        TxtAEntete = False
+    Else
+        TxtAEntete = True
+    End If
+
+End Function
