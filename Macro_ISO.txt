@@ -1,0 +1,303 @@
+Option Explicit
+
+Sub ComparerExcelAvecTxt_Detail()
+
+    Dim wbResultat As Workbook
+    Dim wsResultat As Worksheet
+    Dim dossier As String
+    Dim nomFichier As String
+    Dim cheminComplet As String
+    Dim wbSource As Workbook
+    Dim ws As Worksheet
+    
+    Dim totalLignesExcel As Long
+    Dim totalLignesTxt As Long
+    Dim totalDonneesExcel As Long
+    Dim totalDonneesTxt As Long
+    
+    Dim nbLignesFichier As Long
+    Dim nbEntetesExcel As Long
+    Dim nbEntetesTxt As Long
+    
+    Dim ligneDetail As Long
+    Dim cheminTxt As String
+    Dim nomTxt As String
+    Dim aEntete As Boolean
+
+    On Error GoTo GestionErreur
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.EnableEvents = False
+
+    Set wbResultat = ActiveWorkbook
+    Set wsResultat = wbResultat.Worksheets(1)
+
+    dossier = wbResultat.Path
+
+    If dossier = "" Then
+        MsgBox "Veuillez enregistrer le fichier résultat avant exécution.", vbExclamation
+        GoTo Fin
+    End If
+
+    dossier = dossier & "\"
+
+    wsResultat.Range("A1:F1000").ClearContents
+
+    wsResultat.Range("A1").Value = "Résultat"
+    wsResultat.Range("A3").Value = "Fichier"
+    wsResultat.Range("B3").Value = "Type"
+    wsResultat.Range("C3").Value = "Lignes lues"
+    wsResultat.Range("D3").Value = "Entête détectée"
+    wsResultat.Range("E3").Value = "Lignes données"
+
+    ligneDetail = 4
+
+    ' ============================
+    ' Lecture des fichiers Excel
+    ' ============================
+    nomFichier = Dir(dossier & "*.xls*")
+
+    Do While nomFichier <> ""
+
+        If nomFichier <> wbResultat.Name _
+        And Left(nomFichier, 2) <> "~$" Then
+
+            cheminComplet = dossier & nomFichier
+
+            Set wbSource = Workbooks.Open( _
+                Filename:=cheminComplet, _
+                ReadOnly:=True, _
+                UpdateLinks:=False)
+
+            Set ws = wbSource.Worksheets(1)
+
+            nbLignesFichier = CompterLignesExcel(ws)
+            aEntete = FeuilleAEntete(ws)
+
+            totalLignesExcel = totalLignesExcel + nbLignesFichier
+
+            If aEntete Then
+                nbEntetesExcel = nbEntetesExcel + 1
+                totalDonneesExcel = totalDonneesExcel + Application.Max(nbLignesFichier - 1, 0)
+            Else
+                totalDonneesExcel = totalDonneesExcel + nbLignesFichier
+            End If
+
+            wsResultat.Cells(ligneDetail, 1).Value = nomFichier
+            wsResultat.Cells(ligneDetail, 2).Value = "Excel"
+            wsResultat.Cells(ligneDetail, 3).Value = nbLignesFichier
+            wsResultat.Cells(ligneDetail, 4).Value = IIf(aEntete, "OUI", "NON")
+            wsResultat.Cells(ligneDetail, 5).Value = IIf(aEntete, Application.Max(nbLignesFichier - 1, 0), nbLignesFichier)
+
+            ligneDetail = ligneDetail + 1
+
+            wbSource.Close SaveChanges:=False
+            Set wbSource = Nothing
+
+        End If
+
+        nomFichier = Dir()
+
+    Loop
+
+    ' ============================
+    ' Recherche TXT uniquement dans le même dossier
+    ' ============================
+    nomTxt = Dir(dossier & "*.txt")
+
+    If nomTxt = "" Then
+        MsgBox "Aucun fichier TXT trouvé dans :" & vbCrLf & dossier, vbExclamation
+        GoTo Fin
+    End If
+
+    cheminTxt = dossier & nomTxt
+
+    totalLignesTxt = CompterLignesTxt(cheminTxt)
+
+    If TxtAEntete(cheminTxt) Then
+        nbEntetesTxt = 1
+        totalDonneesTxt = Application.Max(totalLignesTxt - 1, 0)
+        aEntete = True
+    Else
+        nbEntetesTxt = 0
+        totalDonneesTxt = totalLignesTxt
+        aEntete = False
+    End If
+
+    wsResultat.Cells(ligneDetail, 1).Value = nomTxt
+    wsResultat.Cells(ligneDetail, 2).Value = "TXT référence"
+    wsResultat.Cells(ligneDetail, 3).Value = totalLignesTxt
+    wsResultat.Cells(ligneDetail, 4).Value = IIf(aEntete, "OUI", "NON")
+    wsResultat.Cells(ligneDetail, 5).Value = totalDonneesTxt
+
+    ligneDetail = ligneDetail + 2
+
+    ' ============================
+    ' Totaux
+    ' ============================
+    wsResultat.Cells(ligneDetail, 1).Value = "Total lignes Excel"
+    wsResultat.Cells(ligneDetail, 3).Value = totalLignesExcel
+
+    wsResultat.Cells(ligneDetail + 1, 1).Value = "Entêtes Excel retirées"
+    wsResultat.Cells(ligneDetail + 1, 3).Value = nbEntetesExcel
+
+    wsResultat.Cells(ligneDetail + 2, 1).Value = "Total données Excel"
+    wsResultat.Cells(ligneDetail + 2, 3).Value = totalDonneesExcel
+
+    wsResultat.Cells(ligneDetail + 3, 1).Value = "Total lignes TXT"
+    wsResultat.Cells(ligneDetail + 3, 3).Value = totalLignesTxt
+
+    wsResultat.Cells(ligneDetail + 4, 1).Value = "Entête TXT retirée"
+    wsResultat.Cells(ligneDetail + 4, 3).Value = nbEntetesTxt
+
+    wsResultat.Cells(ligneDetail + 5, 1).Value = "Total données TXT"
+    wsResultat.Cells(ligneDetail + 5, 3).Value = totalDonneesTxt
+
+    ' ============================
+    ' Résultat ISO / KO
+    ' ============================
+    With wsResultat.Range("A2")
+        If totalDonneesExcel = totalDonneesTxt Then
+            .Value = "ISO"
+            .Font.Color = RGB(0, 176, 80)
+        Else
+            .Value = "KO"
+            .Font.Color = RGB(255, 0, 0)
+        End If
+        
+        .Font.Size = 28
+        .Font.Bold = True
+    End With
+
+    wsResultat.Columns("A:E").AutoFit
+
+    MsgBox "Contrôle terminé : " & wsResultat.Range("A2").Value, vbInformation
+
+Fin:
+    On Error Resume Next
+
+    If Not wbSource Is Nothing Then
+        wbSource.Close SaveChanges:=False
+    End If
+
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.EnableEvents = True
+
+    Exit Sub
+
+GestionErreur:
+    MsgBox "Erreur : " & Err.Description, vbCritical
+    Resume Fin
+
+End Sub
+
+
+Function CompterLignesExcel(ByVal ws As Worksheet) As Long
+
+    If Application.WorksheetFunction.CountA(ws.Cells) = 0 Then
+        CompterLignesExcel = 0
+    Else
+        CompterLignesExcel = ws.Cells.Find( _
+            What:="*", _
+            After:=ws.Cells(1, 1), _
+            LookIn:=xlFormulas, _
+            LookAt:=xlPart, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlPrevious).Row
+    End If
+
+End Function
+
+
+Function FeuilleAEntete(ByVal ws As Worksheet) As Boolean
+
+    Dim valeurA1 As String
+
+    valeurA1 = Trim(CStr(ws.Range("A1").Value))
+
+    If valeurA1 = "" Then
+        FeuilleAEntete = False
+    ElseIf IsNumeric(valeurA1) Then
+        FeuilleAEntete = False
+    Else
+        FeuilleAEntete = True
+    End If
+
+End Function
+
+
+Function CompterLignesTxt(ByVal cheminTxt As String) As Long
+
+    Dim numFichier As Integer
+    Dim ligne As String
+    Dim compteur As Long
+
+    numFichier = FreeFile
+
+    Open cheminTxt For Input As #numFichier
+
+    Do Until EOF(numFichier)
+        Line Input #numFichier, ligne
+        compteur = compteur + 1
+    Loop
+
+    Close #numFichier
+
+    CompterLignesTxt = compteur
+
+End Function
+
+
+Function TxtAEntete(ByVal cheminTxt As String) As Boolean
+
+    Dim numFichier As Integer
+    Dim premiereLigne As String
+    Dim premierChamp As String
+    Dim positionSeparateur As Long
+
+    numFichier = FreeFile
+
+    Open cheminTxt For Input As #numFichier
+
+    If Not EOF(numFichier) Then
+        Line Input #numFichier, premiereLigne
+    End If
+
+    Close #numFichier
+
+    premiereLigne = Trim(premiereLigne)
+
+    If premiereLigne = "" Then
+        TxtAEntete = False
+        Exit Function
+    End If
+
+    positionSeparateur = InStr(1, premiereLigne, vbTab)
+
+    If positionSeparateur = 0 Then
+        positionSeparateur = InStr(1, premiereLigne, ";")
+    End If
+
+    If positionSeparateur = 0 Then
+        positionSeparateur = InStr(1, premiereLigne, ",")
+    End If
+
+    If positionSeparateur > 0 Then
+        premierChamp = Left(premiereLigne, positionSeparateur - 1)
+    Else
+        premierChamp = premiereLigne
+    End If
+
+    premierChamp = Trim(premierChamp)
+
+    If premierChamp = "" Then
+        TxtAEntete = False
+    ElseIf IsNumeric(premierChamp) Then
+        TxtAEntete = False
+    Else
+        TxtAEntete = True
+    End If
+
+End Function
