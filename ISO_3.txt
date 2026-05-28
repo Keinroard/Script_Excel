@@ -1,0 +1,437 @@
+Option Explicit
+
+Sub ISO_3()
+
+    Dim wbResultat As Workbook
+    Dim wsResultat As Worksheet
+    Dim dossier As String
+    Dim nomFichier As String
+    Dim cheminComplet As String
+    Dim wbSource As Workbook
+    Dim ws As Worksheet
+
+    Dim totalLignesSources As Long
+    Dim totalLignesTxt As Long
+    Dim totalDonneesSources As Long
+    Dim totalDonneesTxt As Long
+
+    Dim nbLignesFichier As Long
+    Dim nbEntetesSources As Long
+    Dim nbEntetesTxt As Long
+
+    Dim ligneDetail As Long
+    Dim cheminTxt As String
+    Dim nomTxt As String
+    Dim aEntete As Boolean
+
+    On Error GoTo GestionErreur
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.EnableEvents = False
+
+    Set wbResultat = ActiveWorkbook
+    Set wsResultat = wbResultat.Worksheets(1)
+
+    If wbResultat.Path = "" Then
+        MsgBox "Veuillez enregistrer le fichier résultat avant exécution.", vbExclamation
+        GoTo Fin
+    End If
+
+    dossier = wbResultat.Path & "\"
+
+    wsResultat.Cells.Clear
+
+    wsResultat.Range("A1").Value = "Résultat"
+    wsResultat.Range("A4").Value = "Fichier"
+    wsResultat.Range("B4").Value = "Type"
+    wsResultat.Range("C4").Value = "Lignes lues"
+    wsResultat.Range("D4").Value = "Entête détectée"
+    wsResultat.Range("E4").Value = "Lignes données"
+
+    ligneDetail = 5
+
+    ' ============================
+    ' Lecture fichiers Excel
+    ' ============================
+    nomFichier = Dir(dossier & "*.xls*")
+
+    Do While nomFichier <> ""
+
+        If nomFichier <> wbResultat.Name _
+        And Left(nomFichier, 2) <> "~$" Then
+
+            cheminComplet = dossier & nomFichier
+
+            Set wbSource = Workbooks.Open( _
+                fileName:=cheminComplet, _
+                ReadOnly:=True, _
+                UpdateLinks:=False, _
+                Notify:=False, _
+                AddToMru:=False)
+
+            Set ws = wbSource.Worksheets(1)
+
+            nbLignesFichier = CompterLignesExcel(ws)
+            aEntete = FeuilleAEntete(ws)
+
+            totalLignesSources = totalLignesSources + nbLignesFichier
+
+            If aEntete Then
+                nbEntetesSources = nbEntetesSources + 1
+                totalDonneesSources = totalDonneesSources + Application.Max(nbLignesFichier - 1, 0)
+            Else
+                totalDonneesSources = totalDonneesSources + nbLignesFichier
+            End If
+
+            wsResultat.Cells(ligneDetail, 1).Value = nomFichier
+            wsResultat.Cells(ligneDetail, 2).Value = "Excel"
+            wsResultat.Cells(ligneDetail, 3).Value = nbLignesFichier
+            wsResultat.Cells(ligneDetail, 4).Value = IIf(aEntete, "OUI", "NON")
+            wsResultat.Cells(ligneDetail, 5).Value = IIf(aEntete, Application.Max(nbLignesFichier - 1, 0), nbLignesFichier)
+
+            ligneDetail = ligneDetail + 1
+
+            wbSource.Close SaveChanges:=False
+            Set wbSource = Nothing
+
+        End If
+
+        nomFichier = Dir()
+
+    Loop
+
+    ' ============================
+    ' Lecture fichiers CSV
+    ' Compatible CRLF, LF et CR
+    ' ============================
+    nomFichier = Dir(dossier & "*.csv")
+
+    Do While nomFichier <> ""
+
+        If Left(nomFichier, 2) <> "~$" Then
+
+            cheminComplet = dossier & nomFichier
+
+            nbLignesFichier = CompterLignesTexteUniversel(cheminComplet)
+            aEntete = FichierTexteAEntete(cheminComplet)
+
+            totalLignesSources = totalLignesSources + nbLignesFichier
+
+            If aEntete Then
+                nbEntetesSources = nbEntetesSources + 1
+                totalDonneesSources = totalDonneesSources + Application.Max(nbLignesFichier - 1, 0)
+            Else
+                totalDonneesSources = totalDonneesSources + nbLignesFichier
+            End If
+
+            wsResultat.Cells(ligneDetail, 1).Value = nomFichier
+            wsResultat.Cells(ligneDetail, 2).Value = "CSV"
+            wsResultat.Cells(ligneDetail, 3).Value = nbLignesFichier
+            wsResultat.Cells(ligneDetail, 4).Value = IIf(aEntete, "OUI", "NON")
+            wsResultat.Cells(ligneDetail, 5).Value = IIf(aEntete, Application.Max(nbLignesFichier - 1, 0), nbLignesFichier)
+
+            ligneDetail = ligneDetail + 1
+
+        End If
+
+        nomFichier = Dir()
+
+    Loop
+
+    ' ============================
+    ' Lecture TXT référence
+    ' Compatible CRLF, LF et CR
+    ' ============================
+    nomTxt = Dir(dossier & "*.txt")
+
+    If nomTxt = "" Then
+        MsgBox "Aucun fichier TXT trouvé dans :" & vbCrLf & dossier, vbExclamation
+        GoTo Fin
+    End If
+
+    cheminTxt = dossier & nomTxt
+
+    totalLignesTxt = CompterLignesTexteUniversel(cheminTxt)
+
+    If FichierTexteAEntete(cheminTxt) Then
+        nbEntetesTxt = 1
+        totalDonneesTxt = Application.Max(totalLignesTxt - 1, 0)
+        aEntete = True
+    Else
+        nbEntetesTxt = 0
+        totalDonneesTxt = totalLignesTxt
+        aEntete = False
+    End If
+
+    wsResultat.Cells(ligneDetail, 1).Value = nomTxt
+    wsResultat.Cells(ligneDetail, 2).Value = "TXT référence"
+    wsResultat.Cells(ligneDetail, 3).Value = totalLignesTxt
+    wsResultat.Cells(ligneDetail, 4).Value = IIf(aEntete, "OUI", "NON")
+    wsResultat.Cells(ligneDetail, 5).Value = totalDonneesTxt
+
+    ligneDetail = ligneDetail + 2
+
+    wsResultat.Cells(ligneDetail, 1).Value = "Total données Excel + CSV"
+    wsResultat.Cells(ligneDetail, 5).Value = totalDonneesSources
+
+    wsResultat.Cells(ligneDetail + 1, 1).Value = "Total données TXT"
+    wsResultat.Cells(ligneDetail + 1, 5).Value = totalDonneesTxt
+
+    With wsResultat.Range("A2")
+        If totalDonneesSources = totalDonneesTxt Then
+            .Value = "ISO"
+            .Font.Color = RGB(0, 176, 80)
+        Else
+            .Value = "KO"
+            .Font.Color = RGB(255, 0, 0)
+        End If
+
+        .Font.Size = 54
+        .Font.Bold = True
+    End With
+
+    MiseEnPageResultat wsResultat, ligneDetail + 1
+
+    MsgBox "Contrôle terminé : " & wsResultat.Range("A2").Value, vbInformation
+
+Fin:
+    On Error Resume Next
+
+    If Not wbSource Is Nothing Then
+        wbSource.Close SaveChanges:=False
+    End If
+
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.EnableEvents = True
+
+    Exit Sub
+
+GestionErreur:
+    MsgBox "Erreur : " & Err.Description, vbCritical
+    Resume Fin
+
+End Sub
+
+Sub MiseEnPageResultat(ByVal ws As Worksheet, ByVal derniereLigne As Long)
+
+    With ws
+        .Cells.ClearFormats
+
+        .Cells.Font.Name = "Aptos Narrow"
+        .Cells.Font.Size = 11
+        .Cells.Interior.Color = RGB(255, 255, 255)
+
+        .Columns("A").ColumnWidth = 55.86
+        .Columns("B").ColumnWidth = 13
+        .Columns("C").ColumnWidth = 13
+        .Columns("D").ColumnWidth = 13
+        .Columns("E").ColumnWidth = 21.43
+
+        .Rows("1").RowHeight = 18
+        .Rows("2").RowHeight = 71.25
+        .Rows("3").RowHeight = 18
+
+        With .Range("A1")
+            .Value = "Résultat"
+            .Interior.Color = RGB(0, 128, 96)
+            .Font.Color = RGB(255, 255, 255)
+            .Font.Bold = True
+            .Borders.LineStyle = xlContinuous
+        End With
+
+        With .Range("A2")
+            .Font.Size = 54
+            .Font.Bold = True
+            .HorizontalAlignment = xlLeft
+            .VerticalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+
+            If .Value = "ISO" Then
+                .Font.Color = RGB(0, 176, 80)
+            ElseIf .Value = "KO" Then
+                .Font.Color = RGB(255, 0, 0)
+            End If
+        End With
+
+        With .Range("A4:E4")
+            .Interior.Color = RGB(0, 128, 96)
+            .Font.Color = RGB(255, 255, 255)
+            .Font.Bold = True
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+        End With
+
+        With .Range("A5:E" & derniereLigne)
+            .Borders.LineStyle = xlContinuous
+            .VerticalAlignment = xlCenter
+        End With
+
+        .Range("A5:B" & derniereLigne).HorizontalAlignment = xlLeft
+        .Range("C5:E" & derniereLigne).HorizontalAlignment = xlCenter
+
+        With .Range("A" & derniereLigne - 1 & ":A" & derniereLigne)
+            .Interior.Color = RGB(0, 128, 96)
+            .Font.Color = RGB(255, 255, 255)
+            .Font.Bold = True
+            .Borders.LineStyle = xlContinuous
+        End With
+
+        With .Range("E" & derniereLigne - 1 & ":E" & derniereLigne)
+            .Font.Size = 20
+            .HorizontalAlignment = xlRight
+            .VerticalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+        End With
+
+        With .Range("A" & derniereLigne - 1 & ":E" & derniereLigne)
+            .Borders.LineStyle = xlContinuous
+        End With
+
+        ActiveWindow.DisplayGridlines = False
+    End With
+
+End Sub
+
+Function CompterLignesExcel(ByVal ws As Worksheet) As Long
+
+    If Application.WorksheetFunction.CountA(ws.Cells) = 0 Then
+        CompterLignesExcel = 0
+    Else
+        CompterLignesExcel = ws.Cells.Find( _
+            What:="*", _
+            After:=ws.Cells(1, 1), _
+            LookIn:=xlFormulas, _
+            LookAt:=xlPart, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlPrevious).Row
+    End If
+
+End Function
+
+Function FeuilleAEntete(ByVal ws As Worksheet) As Boolean
+
+    Dim valeurA1 As String
+
+    valeurA1 = Trim(CStr(ws.Range("A1").Value))
+
+    If valeurA1 = "" Then
+        FeuilleAEntete = False
+    ElseIf IsNumeric(valeurA1) Then
+        FeuilleAEntete = False
+    Else
+        FeuilleAEntete = True
+    End If
+
+End Function
+
+Function CompterLignesTexteUniversel(ByVal cheminFichier As String) As Long
+
+    Dim contenu As String
+    Dim lignes() As String
+    Dim derniereLigne As Long
+
+    contenu = LireFichierTexteComplet(cheminFichier)
+
+    If Len(contenu) = 0 Then
+        CompterLignesTexteUniversel = 0
+        Exit Function
+    End If
+
+    contenu = NormaliserFinsDeLigne(contenu)
+    lignes = Split(contenu, vbLf)
+
+    derniereLigne = UBound(lignes)
+
+    If lignes(derniereLigne) = "" Then
+        CompterLignesTexteUniversel = derniereLigne
+    Else
+        CompterLignesTexteUniversel = derniereLigne + 1
+    End If
+
+End Function
+
+Function FichierTexteAEntete(ByVal cheminFichier As String) As Boolean
+
+    Dim contenu As String
+    Dim lignes() As String
+    Dim premiereLigne As String
+    Dim premierChamp As String
+    Dim positionSeparateur As Long
+
+    contenu = LireFichierTexteComplet(cheminFichier)
+
+    If Len(contenu) = 0 Then
+        FichierTexteAEntete = False
+        Exit Function
+    End If
+
+    contenu = NormaliserFinsDeLigne(contenu)
+    lignes = Split(contenu, vbLf)
+
+    premiereLigne = Trim(lignes(0))
+
+    If premiereLigne = "" Then
+        FichierTexteAEntete = False
+        Exit Function
+    End If
+
+    positionSeparateur = InStr(1, premiereLigne, vbTab)
+
+    If positionSeparateur = 0 Then
+        positionSeparateur = InStr(1, premiereLigne, ";")
+    End If
+
+    If positionSeparateur = 0 Then
+        positionSeparateur = InStr(1, premiereLigne, ",")
+    End If
+
+    If positionSeparateur > 0 Then
+        premierChamp = Left(premiereLigne, positionSeparateur - 1)
+    Else
+        premierChamp = premiereLigne
+    End If
+
+    premierChamp = Trim(premierChamp)
+
+    If premierChamp = "" Then
+        FichierTexteAEntete = False
+    ElseIf IsNumeric(premierChamp) Then
+        FichierTexteAEntete = False
+    Else
+        FichierTexteAEntete = True
+    End If
+
+End Function
+
+Function LireFichierTexteComplet(ByVal cheminFichier As String) As String
+
+    Dim numFichier As Integer
+    Dim contenu As String
+
+    numFichier = FreeFile
+
+    Open cheminFichier For Binary Access Read As #numFichier
+
+    If LOF(numFichier) > 0 Then
+        contenu = Space$(LOF(numFichier))
+        Get #numFichier, , contenu
+    End If
+
+    Close #numFichier
+
+    LireFichierTexteComplet = contenu
+
+End Function
+
+Function NormaliserFinsDeLigne(ByVal contenu As String) As String
+
+    contenu = Replace(contenu, vbCrLf, vbLf)
+    contenu = Replace(contenu, vbCr, vbLf)
+
+    NormaliserFinsDeLigne = contenu
+
+End Function
+

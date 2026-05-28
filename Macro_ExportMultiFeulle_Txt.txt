@@ -1,0 +1,133 @@
+Sub Export_MultiFeuilles()
+
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim lastCol As Long
+    Dim r As Long, c As Long
+    Dim filePath As String
+    Dim fileName As String
+    Dim lineText As String
+    Dim folderPath As String
+    Dim exportFolder As String
+    Dim fileNum As Integer
+    Dim cellValue As String
+    Dim exportedCount As Long
+
+    ' Utilise le fichier Excel actuellement actif
+    Set wb = ActiveWorkbook
+
+    ' Vérifie qu'un fichier est bien ouvert
+    If wb Is Nothing Then
+        MsgBox "Aucun classeur actif.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Vérifie que le fichier est enregistré
+    If wb.Path = "" Then
+        MsgBox "Veuillez d'abord enregistrer le fichier Excel.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Dossier du fichier Excel
+    folderPath = wb.Path
+
+    ' Dossier d'export CRAMAGE
+    exportFolder = folderPath & "\CRAMAGE"
+
+    ' Crée le dossier s'il n'existe pas
+    If Dir(exportFolder, vbDirectory) = "" Then
+        MkDir exportFolder
+    End If
+
+    exportedCount = 0
+
+    ' Parcourt toutes les feuilles du classeur actif
+    For Each ws In wb.Worksheets
+
+        ' Condition : A2 et B2 doivent être remplies
+        If Trim(CStr(ws.Cells(2, 1).Value)) <> "" And _
+           Trim(CStr(ws.Cells(2, 2).Value)) <> "" Then
+
+            ' Dernière ligne utilisée basée sur colonne A
+            lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+
+            ' Dernière colonne utilisée basée sur ligne 2
+            lastCol = ws.Cells(2, ws.Columns.Count).End(xlToLeft).Column
+
+            ' Ignore si aucune donnée exploitable
+            If lastRow < 2 Then GoTo NextSheet
+
+            ' Sécurise le nom du fichier
+            fileName = CleanFileName(ws.Name) & ".txt"
+
+            ' Chemin du fichier dans le dossier CRAMAGE
+            filePath = exportFolder & "\" & fileName
+
+            ' Création du fichier TXT
+            fileNum = FreeFile
+            Open filePath For Output As #fileNum
+
+            ' Export sans entête : ligne 2 jusqu'à la fin
+            For r = 2 To lastRow
+
+                lineText = ""
+
+                For c = 1 To lastCol
+
+                    ' Gestion des erreurs Excel (#N/A, etc.)
+                    If IsError(ws.Cells(r, c).Value) Then
+                        cellValue = ""
+                    Else
+                        cellValue = CStr(ws.Cells(r, c).Text)
+
+                        ' Nettoyage des tabulations et retours ligne
+                        cellValue = Replace(cellValue, vbTab, " ")
+                        cellValue = Replace(cellValue, vbCr, " ")
+                        cellValue = Replace(cellValue, vbLf, " ")
+                    End If
+
+                    lineText = lineText & cellValue
+
+                    ' Ajoute tabulation sauf dernière colonne
+                    If c < lastCol Then
+                        lineText = lineText & vbTab
+                    End If
+
+                Next c
+
+                Print #fileNum, lineText
+
+            Next r
+
+            Close #fileNum
+
+            exportedCount = exportedCount + 1
+
+        End If
+
+NextSheet:
+    Next ws
+
+    MsgBox exportedCount & _
+           " fichier(s) TXT exporté(s) avec succès dans :" & _
+           vbCrLf & exportFolder, vbInformation
+
+End Sub
+
+
+Function CleanFileName(fileName As String) As String
+
+    Dim invalidChars As Variant
+    Dim i As Long
+
+    invalidChars = Array("\", "/", ":", "*", "?", """", "<", ">", "|")
+
+    For i = LBound(invalidChars) To UBound(invalidChars)
+        fileName = Replace(fileName, invalidChars(i), "_")
+    Next i
+
+    CleanFileName = Trim(fileName)
+
+End Function
+

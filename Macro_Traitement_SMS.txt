@@ -1,0 +1,561 @@
+Option Explicit
+
+'===========================================================
+' MACRO PRINCIPALE
+'
+' Format TXT de sortie :
+' - Encodage : UTF-8 avec BOM
+' - Fin de ligne : CRLF
+' - Séparateur : tabulation
+'
+'===========================================================
+Sub Traitement_SMS()
+
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim outputPath As String
+    Dim baseName As String
+    Dim txt As String
+
+    Dim nbLignesDonnees As Long
+    Dim nbUnknown As Long
+    Dim nbLienPaiement As Long
+    Dim nbTicketCaisse As Long
+    Dim nbRcsAttente As Long
+    Dim nbSmsDelivre As Long
+    Dim nbSmsFailover As Long
+    Dim nbRcsReussi As Long
+    Dim nbCellulesVidesColC As Long
+    Dim nbConflitsColA As Long
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+
+    '-------------------------------------------------------
+    ' 1. Identification du fichier de travail actif
+    '-------------------------------------------------------
+    Set wb = ActiveWorkbook
+
+    If UCase(wb.Name) = "PERSONAL.XLSB" Then
+        MsgBox "Clique d'abord sur le fichier de travail à traiter, puis relance la macro.", vbExclamation
+        GoTo Fin
+    End If
+
+    Set ws = wb.ActiveSheet
+
+    If wb.Path = "" Then
+        MsgBox "Le fichier de travail doit être enregistré avant d'exécuter la macro.", vbExclamation
+        GoTo Fin
+    End If
+
+    '-------------------------------------------------------
+    ' 2. Préparation du chemin du fichier TXT de sortie
+    '-------------------------------------------------------
+    baseName = wb.Name
+
+    If InStrRev(baseName, ".") > 0 Then
+        baseName = Left(baseName, InStrRev(baseName, ".") - 1)
+    End If
+
+    outputPath = wb.Path & Application.PathSeparator & baseName & ".txt"
+
+    '-------------------------------------------------------
+    ' 3. Conversion du fichier brut
+    ' Si le fichier est ouvert en une seule colonne,
+    ' découpage automatique avec séparateur ; ou ,
+    '-------------------------------------------------------
+    ConvertirFichierBrut ws
+
+    '-------------------------------------------------------
+    ' 4. Comptage initial des lignes de données
+    '-------------------------------------------------------
+    lastRow = derniereLigne(ws)
+    nbLignesDonnees = Application.Max(0, lastRow - 1)
+
+    '-------------------------------------------------------
+    ' 5. Conversion de la colonne A au format nombre
+    '-------------------------------------------------------
+    nbConflitsColA = ConvertirColonneAEnNombre(ws)
+
+    '-------------------------------------------------------
+    ' 6. Comptages AVANT suppression
+    ' Ces valeurs alimentent les éléments supprimés.
+    ' UNKNOWN est compté uniquement en colonne I.
+    '-------------------------------------------------------
+    nbUnknown = CompterOccurrencesColonne(ws, "I", "UNKNOWN")
+    nbLienPaiement = CompterOccurrencesColonne(ws, "E", "Lien de paiement")
+    nbTicketCaisse = CompterOccurrencesColonne(ws, "E", "Ticket de Caisse")
+    nbRcsAttente = CompterRcsEnAttente(ws)
+
+    '-------------------------------------------------------
+    ' 7. Suppression colonne E :
+    ' Ticket de Caisse / Lien de paiement
+    '-------------------------------------------------------
+    lastRow = derniereLigne(ws)
+
+    For i = lastRow To 2 Step -1
+        If Contient(ws.Cells(i, "E").Value, "Ticket de Caisse") _
+        Or Contient(ws.Cells(i, "E").Value, "Lien de paiement") Then
+            ws.Rows(i).Delete
+        End If
+    Next i
+
+    '-------------------------------------------------------
+    ' 8. Suppression colonne C :
+    ' RCS en attente
+    '-------------------------------------------------------
+    lastRow = derniereLigne(ws)
+
+    For i = lastRow To 2 Step -1
+        If TexteRcsEnAttente(ws.Cells(i, "C").Value) Then
+            ws.Rows(i).Delete
+        End If
+    Next i
+
+    '-------------------------------------------------------
+    ' 9. Nettoyage de la colonne C
+    ' Remplacement de ? et variantes corrompues par :
+    '-------------------------------------------------------
+    lastRow = derniereLigne(ws)
+
+    For i = 2 To lastRow
+        ws.Cells(i, "C").Value = NettoyerResultatColonneC(CStr(ws.Cells(i, "C").Value))
+    Next i
+
+    '-------------------------------------------------------
+    ' 10. Suppression des lignes contenant UNKNOWN
+    ' Règle stricte : colonne I uniquement
+    '-------------------------------------------------------
+    lastRow = derniereLigne(ws)
+
+    For i = lastRow To 2 Step -1
+        If Contient(ws.Cells(i, "I").Value, "UNKNOWN") Then
+            ws.Rows(i).Delete
+        End If
+    Next i
+
+    '-------------------------------------------------------
+    ' 11. Suppression du contenu des colonnes après D
+    ' K:M reste réservé au reporting.
+    '-------------------------------------------------------
+    ws.Range("E:J").ClearContents
+    ws.Range("N:XFD").ClearContents
+
+    '-------------------------------------------------------
+    ' 12. Comptages APRÈS traitement
+    ' Ces valeurs correspondent aux éléments exportés en TXT.
+    '-------------------------------------------------------
+    nbSmsDelivre = CompterResultat(ws, "Echec envoi", "SMS délivré")
+    nbSmsFailover = CompterResultat(ws, "Echec envoi", "SMS Failover")
+    nbRcsReussi = CompterResultat(ws, "envoi réussi", "")
+    nbCellulesVidesColC = CompterCellulesVidesColonne(ws, "C")
+
+    '-------------------------------------------------------
+    ' 13. Création du reporting
+    '-------------------------------------------------------
+    CreerReporting ws, wb.Name, nbLignesDonnees, nbUnknown, nbLienPaiement, _
+                   nbTicketCaisse, nbRcsAttente, nbSmsDelivre, nbSmsFailover, _
+                   nbRcsReussi, nbCellulesVidesColC, nbConflitsColA
+
+    '-------------------------------------------------------
+    ' 14. Export TXT final en tabulation
+    '-------------------------------------------------------
+    txt = ConstruireTxtTabulation(ws)
+    EcrireTxtUTF8_BOM_CRLF outputPath, txt
+
+    MsgBox "Traitement terminé." & vbCrLf & _
+           "Fichier TXT créé :" & vbCrLf & outputPath, vbInformation
+
+Fin:
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+
+End Sub
+
+'===========================================================
+' Convertit un fichier brut ouvert en une seule colonne.
+' Source acceptée : séparateur ; ou ,
+'===========================================================
+Private Sub ConvertirFichierBrut(ws As Worksheet)
+
+    Dim header As String
+
+    If derniereLigne(ws) = 0 Then Exit Sub
+
+    header = CStr(ws.Cells(1, "A").Value)
+
+    ' Si la colonne C contient déjà une valeur, le fichier semble déjà découpé.
+    If ws.Cells(1, "C").Value <> "" Then Exit Sub
+
+    If InStr(1, header, ";") > 0 Then
+
+        ws.Columns("A").TextToColumns _
+            Destination:=ws.Range("A1"), _
+            DataType:=xlDelimited, _
+            TextQualifier:=xlTextQualifierDoubleQuote, _
+            ConsecutiveDelimiter:=False, _
+            Tab:=False, _
+            Semicolon:=True, _
+            Comma:=False, _
+            Space:=False, _
+            Other:=False
+
+    ElseIf InStr(1, header, ",") > 0 Then
+
+        ws.Columns("A").TextToColumns _
+            Destination:=ws.Range("A1"), _
+            DataType:=xlDelimited, _
+            TextQualifier:=xlTextQualifierDoubleQuote, _
+            ConsecutiveDelimiter:=False, _
+            Tab:=False, _
+            Semicolon:=False, _
+            Comma:=True, _
+            Space:=False, _
+            Other:=False
+
+    End If
+
+End Sub
+
+'===========================================================
+' Met la colonne A au format nombre.
+' Retourne le nombre de valeurs non convertibles.
+'===========================================================
+Private Function ConvertirColonneAEnNombre(ws As Worksheet) As Long
+
+    Dim lastRow As Long
+    Dim i As Long
+    Dim v As String
+    Dim conflits As Long
+
+    lastRow = derniereLigne(ws)
+    ws.Columns("A").NumberFormat = "0"
+
+    For i = 2 To lastRow
+        v = Trim(CStr(ws.Cells(i, "A").Value))
+
+        If v <> "" Then
+            If IsNumeric(v) Then
+                ws.Cells(i, "A").Value = CLng(v)
+            Else
+                conflits = conflits + 1
+            End If
+        End If
+    Next i
+
+    ConvertirColonneAEnNombre = conflits
+
+End Function
+
+'===========================================================
+' Nettoie la colonne C :
+' - corrige certains caractères UTF-8 mal interprétés
+' - remplace ? et variantes corrompues par :
+' - normalise les espaces autour des :
+'===========================================================
+Private Function NettoyerResultatColonneC(ByVal texte As String) As String
+
+    texte = Replace(texte, "rÃ©ussi", "réussi")
+    texte = Replace(texte, "dÃ©livrÃ©", "délivré")
+    texte = Replace(texte, "Ã©", "é")
+    texte = Replace(texte, "Ã¨", "è")
+    texte = Replace(texte, "Ãª", "ê")
+    texte = Replace(texte, "Ã ", "à")
+    texte = Replace(texte, "Ã¢", "â")
+    texte = Replace(texte, "Ã§", "ç")
+    texte = Replace(texte, "Ã´", "ô")
+    texte = Replace(texte, "Ã»", "û")
+
+    texte = Replace(texte, ChrW(&H2192), ":")
+    texte = Replace(texte, "â†’", ":")
+    texte = Replace(texte, "â†", ":")
+    texte = Replace(texte, "â?", ":")
+    texte = Replace(texte, "?", ":")
+    texte = Replace(texte, "?", ":")
+
+    Do While InStr(texte, "::") > 0
+        texte = Replace(texte, "::", ":")
+    Loop
+
+    texte = Replace(texte, " :", ":")
+    texte = Replace(texte, ": ", ":")
+    texte = Replace(texte, ":", " : ")
+
+    Do While InStr(texte, "  ") > 0
+        texte = Replace(texte, "  ", " ")
+    Loop
+
+    NettoyerResultatColonneC = Trim(texte)
+
+End Function
+
+'===========================================================
+' Détecte RCS en attente même si le séparateur est :
+' ou ? ou mal interprété.
+'===========================================================
+Private Function TexteRcsEnAttente(ByVal texte As String) As Boolean
+
+    Dim t As String
+
+    t = LCase(NettoyerResultatColonneC(CStr(texte)))
+    t = Replace(t, ":", " ")
+
+    Do While InStr(t, "  ") > 0
+        t = Replace(t, "  ", " ")
+    Loop
+
+    TexteRcsEnAttente = Trim(t) = "rcs en attente"
+
+End Function
+
+'===========================================================
+' Construit le TXT final avec tabulations.
+' Colonnes exportées : A à D uniquement.
+'===========================================================
+Private Function ConstruireTxtTabulation(ws As Worksheet) As String
+
+    Dim lastRow As Long
+    Dim r As Long
+    Dim txt As String
+
+    lastRow = derniereLigne(ws)
+
+    For r = 1 To lastRow
+        txt = txt & _
+              ChampExportTab(ws.Cells(r, "A").Value) & vbTab & _
+              ChampExportTab(ws.Cells(r, "B").Value) & vbTab & _
+              ChampExportTab(ws.Cells(r, "C").Value) & vbTab & _
+              ChampExportTab(ValeurDate(ws.Cells(r, "D"))) & vbCrLf
+    Next r
+
+    ConstruireTxtTabulation = txt
+
+End Function
+
+'===========================================================
+' Nettoie un champ exporté :
+' - supprime les tabulations internes
+' - supprime les retours ligne internes
+' pour éviter de casser les colonnes du TXT.
+'===========================================================
+Private Function ChampExportTab(ByVal valeur As Variant) As String
+
+    Dim s As String
+
+    s = CStr(valeur)
+
+    s = Replace(s, vbCrLf, " ")
+    s = Replace(s, vbCr, " ")
+    s = Replace(s, vbLf, " ")
+    s = Replace(s, vbTab, " ")
+
+    ChampExportTab = s
+
+End Function
+
+'===========================================================
+' Force les dates au format jj/mm/aaaa.
+'===========================================================
+Private Function ValeurDate(cellule As Range) As String
+
+    If IsDate(cellule.Value) Then
+        ValeurDate = Format(CDate(cellule.Value), "dd/mm/yyyy")
+    Else
+        ValeurDate = CStr(cellule.Value)
+    End If
+
+End Function
+
+'===========================================================
+' Écrit le TXT en UTF-8 avec BOM et fins CRLF.
+'===========================================================
+Private Sub EcrireTxtUTF8_BOM_CRLF(ByVal chemin As String, ByVal contenu As String)
+
+    Dim stream As Object
+
+    contenu = Replace(contenu, vbCrLf, vbLf)
+    contenu = Replace(contenu, vbCr, vbLf)
+    contenu = Replace(contenu, vbLf, vbCrLf)
+
+    Set stream = CreateObject("ADODB.Stream")
+
+    With stream
+        .Type = 2
+        .Charset = "utf-8"
+        .Open
+        .WriteText contenu
+        .SaveToFile chemin, 2
+        .Close
+    End With
+
+End Sub
+
+'===========================================================
+' Crée le reporting à partir de K1.
+'===========================================================
+Private Sub CreerReporting(ws As Worksheet, nomFichier As String, _
+                           nbLignes As Long, nbUnknown As Long, _
+                           nbLien As Long, nbTicket As Long, nbRcs As Long, _
+                           nbSmsDelivre As Long, nbSmsFailover As Long, _
+                           nbRcsReussi As Long, nbCellulesVidesColC As Long, _
+                           nbConflitsA As Long)
+
+    ws.Range("K1:M30").Clear
+
+    EcrireLigneTitre ws, 1, "Contrôle", "Valeur", "Commentaire"
+    EcrireLigne ws, 2, "Fichier source", nomFichier, "Fichier de travail traité par la macro"
+    EcrireLigne ws, 3, "Nombre de lignes de données", nbLignes, "Hors en-tête"
+
+    EcrireLigneTitre ws, 7, "Elements Supprimés", "Valeur", "Commentaire"
+    EcrireLigne ws, 8, "Lignes contenant UNKNOWN", nbUnknown, "Colonne I"
+    EcrireLigne ws, 9, "Lien de paiement", nbLien, "Colonne E"
+    EcrireLigne ws, 10, "Ticket de Caisse", nbTicket, "Colonne E"
+    EcrireLigne ws, 11, "RCS en attente", nbRcs, "Colonne C"
+
+    EcrireLigneTitre ws, 16, "Elements Conservés", "Valeur", "Commentaire"
+    EcrireLigne ws, 17, "Résultat RCS : Echec envoi : SMS délivré", nbSmsDelivre, "Colonne C"
+    EcrireLigne ws, 18, "Résultat RCS : Echec envoi : SMS Failover", nbSmsFailover, "Colonne C"
+    EcrireLigne ws, 19, "Résultat RCS : envoi réussi", nbRcsReussi, "Colonne C"
+
+    With ws.Range("K17:M17")
+        .Interior.Color = RGB(255, 255, 0)
+        .Font.Color = RGB(0, 0, 0)
+    End With
+
+    EcrireLigneTitre ws, 25, "Elements Complémentaires", "Valeur", "Commentaire"
+    EcrireLigne ws, 26, "Cellules vides colonne C", nbCellulesVidesColC, "Valeur vide ou espace"
+    EcrireLigne ws, 27, "Conflits colonne A", nbConflitsA, "Valeurs non convertibles en nombre"
+
+    With ws.Range("K1:M3,K7:M11,K16:M19,K25:M27")
+        .Borders.LineStyle = xlContinuous
+    End With
+
+    ws.Columns("K:M").AutoFit
+
+End Sub
+
+Private Sub EcrireLigneTitre(ws As Worksheet, ligne As Long, titre1 As String, titre2 As String, titre3 As String)
+
+    ws.Cells(ligne, "K").Value = titre1
+    ws.Cells(ligne, "L").Value = titre2
+    ws.Cells(ligne, "M").Value = titre3
+
+    With ws.Range("K" & ligne & ":M" & ligne)
+        .Font.Bold = True
+        .Interior.Color = RGB(0, 128, 112)
+        .Font.Color = RGB(255, 255, 255)
+    End With
+
+End Sub
+
+Private Sub EcrireLigne(ws As Worksheet, ligne As Long, libelle As String, valeur As Variant, commentaire As String)
+
+    ws.Cells(ligne, "K").Value = libelle
+    ws.Cells(ligne, "L").Value = valeur
+    ws.Cells(ligne, "M").Value = commentaire
+
+End Sub
+
+Private Function CompterResultat(ws As Worksheet, texte1 As String, texte2 As String) As Long
+
+    Dim lastRow As Long
+    Dim i As Long
+    Dim valeur As String
+    Dim compteur As Long
+
+    lastRow = derniereLigne(ws)
+
+    For i = 2 To lastRow
+        valeur = NettoyerResultatColonneC(CStr(ws.Cells(i, "C").Value))
+
+        If InStr(1, valeur, texte1, vbTextCompare) > 0 Then
+            If texte2 = "" Or InStr(1, valeur, texte2, vbTextCompare) > 0 Then
+                compteur = compteur + 1
+            End If
+        End If
+    Next i
+
+    CompterResultat = compteur
+
+End Function
+
+Private Function CompterCellulesVidesColonne(ws As Worksheet, colonne As String) As Long
+
+    Dim lastRow As Long
+    Dim i As Long
+    Dim compteur As Long
+
+    lastRow = derniereLigne(ws)
+
+    For i = 2 To lastRow
+        If Trim(CStr(ws.Cells(i, colonne).Value)) = "" Then
+            compteur = compteur + 1
+        End If
+    Next i
+
+    CompterCellulesVidesColonne = compteur
+
+End Function
+
+Private Function CompterOccurrencesColonne(ws As Worksheet, colonne As String, texteRecherche As String) As Long
+
+    Dim lastRow As Long
+    Dim i As Long
+    Dim compteur As Long
+
+    lastRow = derniereLigne(ws)
+
+    For i = 2 To lastRow
+        If Contient(ws.Cells(i, colonne).Value, texteRecherche) Then
+            compteur = compteur + 1
+        End If
+    Next i
+
+    CompterOccurrencesColonne = compteur
+
+End Function
+
+Private Function CompterRcsEnAttente(ws As Worksheet) As Long
+
+    Dim lastRow As Long
+    Dim i As Long
+    Dim compteur As Long
+
+    lastRow = derniereLigne(ws)
+
+    For i = 2 To lastRow
+        If TexteRcsEnAttente(ws.Cells(i, "C").Value) Then
+            compteur = compteur + 1
+        End If
+    Next i
+
+    CompterRcsEnAttente = compteur
+
+End Function
+
+Private Function Contient(ByVal valeur As Variant, ByVal texteRecherche As String) As Boolean
+
+    Contient = InStr(1, CStr(valeur), texteRecherche, vbTextCompare) > 0
+
+End Function
+
+Private Function derniereLigne(ws As Worksheet) As Long
+
+    Dim cellule As Range
+
+    Set cellule = ws.Cells.Find(What:="*", _
+                                LookIn:=xlFormulas, _
+                                LookAt:=xlPart, _
+                                SearchOrder:=xlByRows, _
+                                SearchDirection:=xlPrevious)
+
+    If cellule Is Nothing Then
+        derniereLigne = 0
+    Else
+        derniereLigne = cellule.Row
+    End If
+
+End Function
+
